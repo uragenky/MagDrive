@@ -10,8 +10,10 @@ import {
   Play,
   XCircle,
   Trash2,
+  FolderOpen,
 } from 'lucide-react';
 import { listen } from '@tauri-apps/api/event';
+import { revealItemInDir } from '@tauri-apps/plugin-opener';
 import { TransferRecord, TransferProgressPayload } from '../types';
 
 interface TransfersViewProps {
@@ -267,6 +269,22 @@ export const TransfersView: React.FC<TransfersViewProps> = ({
                             className="p-1.5 rounded hover:bg-slate-800 text-slate-400 hover:text-rose-400 transition-colors"
                           >
                             <XCircle className="w-3.5 h-3.5" />
+                          </button>
+                        )}
+
+                        {isFinished && !isUpload && status === 'completed' && tx.destination_path && (
+                          <button
+                            onClick={async () => {
+                              try {
+                                await revealItemInDir(tx.destination_path!);
+                              } catch (e) {
+                                console.error('Failed to reveal item in dir:', e);
+                              }
+                            }}
+                            title="Show in Folder"
+                            className="p-1.5 rounded hover:bg-slate-800 text-slate-400 hover:text-emerald-400 transition-colors"
+                          >
+                            <FolderOpen className="w-3.5 h-3.5" />
                           </button>
                         )}
 

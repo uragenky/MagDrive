@@ -53,6 +53,7 @@ Files uploaded through MagDrive are:
 - **Transparent OAuth 2.0 Auto-Refresh & 401 Interceptor**: Tokens are tracked by expiry and proactively refreshed before calls; any reactive HTTP 401 response is automatically intercepted to renew credentials on-the-fly without interrupting running operations.
 - **Transfer Queue Lifecycle & Auto-Cleanup**: Full state machine with Pause, Resume, Cancel, and Delete. Cancelling a transfer automatically removes any orphaned chunks uploaded to Google Drive.
 - **Transfer State Machine**: Resumable chunk transfers equipped with a Leaky Bucket Rate Limiter and Exponential Backoff with Jitter against Google API rate limits (HTTP 429).
+- **Direct-to-Disk Streaming Downloads & Save Management**: Files reconstruct directly onto disk in streaming chunks with constant minimal RAM usage (~32 MB). Features an interactive in-app download popup modal, native OS GTK/Win32 file dialogs, configurable default download directory, collision-safe file naming, and one-click "Show in Folder" file manager reveal.
 - **Multi-Platform Support**: Cross-compiled binaries for Windows (`.msi` / `.exe`), macOS (`.dmg` / `.app`), and Linux (`.deb` / `.AppImage`).
 
 ---

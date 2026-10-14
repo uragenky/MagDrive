@@ -1,5 +1,7 @@
 import { useState, useEffect } from 'react';
 import { listen } from '@tauri-apps/api/event';
+import { CheckCircle2, FolderOpen, ExternalLink, X } from 'lucide-react';
+import { openPath, revealItemInDir } from '@tauri-apps/plugin-opener';
 import './App.css';
 
 import { Sidebar, ActiveTab } from './components/Sidebar';
@@ -12,6 +14,7 @@ import { SettingsView } from './components/SettingsView';
 import { HealthView } from './components/HealthView';
 import { MagnetModal } from './components/MagnetModal';
 import { VaultModal } from './components/VaultModal';
+import { DownloadModal } from './components/DownloadModal';
 
 import { PackageManifest, TransferRecord, VaultRecord, VaultTarget, TransferProgressPayload } from './types';
 import { api } from './services/api';
@@ -24,10 +27,20 @@ export function App() {
   const [transfers, setTransfers] = useState<TransferRecord[]>([]);
   const [isSyncing, setIsSyncing] = useState(false);
   const [isDownloading, setIsDownloading] = useState<string | null>(null);
+  const [downloadToast, setDownloadToast] = useState<{
+    fileName: string;
+    destinationPath: string;
+  } | null>(null);
 
   // Modals
   const [isMagnetModalOpen, setIsMagnetModalOpen] = useState(false);
   const [isVaultModalOpen, setIsVaultModalOpen] = useState(false);
+  const [downloadModalTarget, setDownloadModalTarget] = useState<{
+    packageId: string;
+    fileName: string;
+    fileSize?: number;
+    originalSha256?: string;
+  } | null>(null);
 
   useEffect(() => {
     loadInitialData();
@@ -121,30 +134,45 @@ export function App() {
 
   const handleDownload = async (packageId: string) => {
     try {
-      setIsDownloading(packageId);
       const pkg = files.find((f) => f.package_id === packageId);
       const fileName = pkg ? pkg.name : `download_${packageId}.bin`;
 
-      const b64 = await api.downloadPackage(packageId);
+      // 1. Fetch user's download preferences
+      const settings = await api.getDownloadSettings();
 
-      // Trigger browser/desktop file save
-      const byteCharacters = atob(b64);
-      const byteNumbers = new Array(byteCharacters.length);
-      for (let i = 0; i < byteCharacters.length; i++) {
-        byteNumbers[i] = byteCharacters.charCodeAt(i);
+      // 2. If prompt_save_location is enabled, open interactive in-app DownloadModal
+      if (settings.prompt_save_location) {
+        setDownloadModalTarget({
+          packageId,
+          fileName,
+          fileSize: pkg?.total_size,
+          originalSha256: pkg?.original_sha256,
+        });
+        return;
       }
-      const byteArray = new Uint8Array(byteNumbers);
-      const blob = new Blob([byteArray], { type: 'application/octet-stream' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = fileName;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
 
+      // 3. Otherwise, automatically download to default download folder
+      const destinationPath = await api.resolveDownloadPath(settings.download_dir, fileName);
+      await executeDownload(packageId, destinationPath, fileName);
+    } catch (err: any) {
+      alert('Failed to prepare download: ' + (err?.toString() || ''));
+    }
+  };
+
+  const executeDownload = async (packageId: string, destinationPath: string, displayName?: string) => {
+    try {
+      setIsDownloading(packageId);
+      const result = await api.downloadPackage(packageId, destinationPath);
       await refreshTransfers();
+
+      // Close modal if open
+      setDownloadModalTarget(null);
+
+      // Show success toast with quick action to open folder or file
+      setDownloadToast({
+        fileName: displayName || destinationPath.split(/[/\\]/).pop() || 'file',
+        destinationPath: result.destination_path,
+      });
     } catch (err: any) {
       alert('Failed to download file: ' + (err?.toString() || ''));
     } finally {
@@ -329,6 +357,72 @@ export function App() {
         onImportVault={handleImportVault}
         onDeleteVault={handleDeleteVault}
       />
+
+      {downloadModalTarget && (
+        <DownloadModal
+          isOpen={!!downloadModalTarget}
+          onClose={() => setDownloadModalTarget(null)}
+          packageId={downloadModalTarget.packageId}
+          fileName={downloadModalTarget.fileName}
+          fileSize={downloadModalTarget.fileSize}
+          originalSha256={downloadModalTarget.originalSha256}
+          onConfirmDownload={(destPath) =>
+            executeDownload(downloadModalTarget.packageId, destPath, downloadModalTarget.fileName)
+          }
+          isDownloading={isDownloading === downloadModalTarget.packageId}
+        />
+      )}
+
+      {/* Download Completion Notification Banner */}
+      {downloadToast && (
+        <div className="fixed bottom-6 right-6 z-50 bg-slate-900 border border-emerald-500/40 rounded-2xl p-4 shadow-2xl shadow-emerald-950/60 flex items-start space-x-3.5 max-w-md backdrop-blur-md">
+          <div className="w-8 h-8 rounded-xl bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 flex items-center justify-center shrink-0 mt-0.5">
+            <CheckCircle2 className="w-4 h-4" />
+          </div>
+          <div className="flex-1 min-w-0">
+            <div className="text-xs font-bold text-slate-100 flex items-center justify-between">
+              <span>Download Complete</span>
+              <button
+                onClick={() => setDownloadToast(null)}
+                className="text-slate-500 hover:text-slate-300 transition-colors ml-2"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
+            <p className="text-[11px] text-slate-300 font-mono truncate mt-0.5" title={downloadToast.fileName}>
+              {downloadToast.fileName}
+            </p>
+            <div className="flex items-center space-x-2 mt-2.5">
+              <button
+                onClick={async () => {
+                  try {
+                    await revealItemInDir(downloadToast.destinationPath);
+                  } catch (e) {
+                    console.error('Failed to reveal file:', e);
+                  }
+                }}
+                className="flex items-center space-x-1 px-2.5 py-1 rounded-lg text-[11px] font-semibold bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-300 border border-emerald-500/30 transition-all"
+              >
+                <FolderOpen className="w-3 h-3" />
+                <span>Show in Folder</span>
+              </button>
+              <button
+                onClick={async () => {
+                  try {
+                    await openPath(downloadToast.destinationPath);
+                  } catch (e) {
+                    console.error('Failed to open file:', e);
+                  }
+                }}
+                className="flex items-center space-x-1 px-2.5 py-1 rounded-lg text-[11px] font-semibold bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 transition-all"
+              >
+                <ExternalLink className="w-3 h-3" />
+                <span>Open File</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

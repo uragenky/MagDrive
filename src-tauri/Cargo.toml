@@ -36,6 +36,7 @@ uuid = { version = "1.8", features = ["v4", "serde"] }
 flate2 = "1.0"
 thiserror = "1.0"
 dirs = "5.0"
+rfd = { version = "0.15", default-features = false, features = ["tokio", "gtk3", "common-controls-v6"] }
 
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration

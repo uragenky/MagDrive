@@ -80,6 +80,7 @@ export interface TransferRecord {
   transferred_bytes: number;
   status: TransferStatus | string;
   error_message?: string;
+  destination_path?: string;
   updated_at: number;
 }
 
@@ -117,4 +118,14 @@ export interface MagnetInfo {
   vault_hint?: string;
   total_bytes?: number;
   name?: string;
+}
+
+export interface DownloadSettings {
+  download_dir: string;
+  prompt_save_location: boolean;
+}
+
+export interface DownloadResult {
+  destination_path: string;
+  total_bytes: number;
 }

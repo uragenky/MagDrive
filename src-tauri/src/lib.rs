@@ -35,6 +35,11 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::get_gcp_settings,
             commands::save_gcp_settings,
+            commands::get_download_settings,
+            commands::save_download_settings,
+            commands::pick_download_directory,
+            commands::pick_save_file_path,
+            commands::resolve_download_path,
             commands::start_google_login,
             commands::check_login_status,
             commands::logout_google,

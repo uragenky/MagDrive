@@ -11,6 +11,9 @@ import {
   ExternalLink,
   Copy,
   Check,
+  FolderDown,
+  FolderOpen,
+  RotateCcw,
 } from 'lucide-react';
 import { openUrl } from '@tauri-apps/plugin-opener';
 import { listen } from '@tauri-apps/api/event';
@@ -35,6 +38,11 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   const [isSavingGcp, setIsSavingGcp] = useState(false);
   const [authUrlManual, setAuthUrlManual] = useState<string | null>(null);
   const [copiedAuthUrl, setCopiedAuthUrl] = useState(false);
+
+  // Download preferences state
+  const [downloadDir, setDownloadDir] = useState('');
+  const [promptSaveLocation, setPromptSaveLocation] = useState(true);
+  const [downloadSettingsSaved, setDownloadSettingsSaved] = useState(false);
 
   // Targets state for active vault
   const [targets, setTargets] = useState<VaultTarget[]>([]);
@@ -81,8 +89,53 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
       }
       const logged = await api.checkLoginStatus();
       setIsLoggedIn(logged);
+
+      const dlSettings = await api.getDownloadSettings();
+      if (dlSettings) {
+        setDownloadDir(dlSettings.download_dir);
+        setPromptSaveLocation(dlSettings.prompt_save_location);
+      }
     } catch (err: any) {
       console.error(err);
+    }
+  };
+
+  const triggerDownloadSavedNotice = () => {
+    setDownloadSettingsSaved(true);
+    setTimeout(() => setDownloadSettingsSaved(false), 2500);
+  };
+
+  const handleBrowseDownloadDir = async () => {
+    try {
+      const selected = await api.pickDownloadDirectory(downloadDir);
+      if (selected) {
+        setDownloadDir(selected);
+        await api.saveDownloadSettings(selected, promptSaveLocation);
+        triggerDownloadSavedNotice();
+      }
+    } catch (err) {
+      console.error('Failed to pick download directory:', err);
+    }
+  };
+
+  const handleTogglePromptSave = async (enabled: boolean) => {
+    setPromptSaveLocation(enabled);
+    try {
+      await api.saveDownloadSettings(downloadDir, enabled);
+      triggerDownloadSavedNotice();
+    } catch (err) {
+      console.error('Failed to save prompt settings:', err);
+    }
+  };
+
+  const handleResetDownloadDir = async () => {
+    try {
+      await api.saveDownloadSettings('', promptSaveLocation);
+      const res = await api.getDownloadSettings();
+      setDownloadDir(res.download_dir);
+      triggerDownloadSavedNotice();
+    } catch (err) {
+      console.error('Failed to reset download directory:', err);
     }
   };
 
@@ -359,6 +412,80 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               />
             </div>
           )}
+        </div>
+
+        {/* Section 2: Download Preferences */}
+        <div className="bg-slate-950 border border-slate-800 rounded-2xl p-6 space-y-5">
+          <div className="flex items-center justify-between border-b border-slate-800/80 pb-3">
+            <div className="flex items-center space-x-2">
+              <FolderDown className="w-5 h-5 text-emerald-400" />
+              <div>
+                <h3 className="text-sm font-bold text-slate-100">Download Preferences</h3>
+                <p className="text-[11px] text-slate-500">Configure default save location and download prompt behaviors.</p>
+              </div>
+            </div>
+            {downloadSettingsSaved && (
+              <span className="flex items-center space-x-1 text-xs text-emerald-400 font-medium">
+                <Check className="w-3.5 h-3.5" />
+                <span>Saved</span>
+              </span>
+            )}
+          </div>
+
+          <div className="space-y-4">
+            {/* Default Download Directory */}
+            <div>
+              <label className="text-xs font-semibold text-slate-400 block mb-1.5">
+                Default Download Directory
+              </label>
+              <div className="flex items-center space-x-2">
+                <div className="flex-1 bg-slate-900 border border-slate-800 rounded-xl px-3.5 py-2.5 text-xs text-slate-200 font-mono truncate select-all">
+                  {downloadDir || 'Detecting default system download folder...'}
+                </div>
+                <button
+                  type="button"
+                  onClick={handleBrowseDownloadDir}
+                  className="flex items-center space-x-1.5 px-3.5 py-2.5 rounded-xl text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-emerald-400 border border-slate-700 transition-all shrink-0"
+                >
+                  <FolderOpen className="w-3.5 h-3.5" />
+                  <span>Change...</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={handleResetDownloadDir}
+                  title="Reset to system default Downloads folder"
+                  className="p-2.5 rounded-xl text-xs font-semibold bg-slate-900 hover:bg-slate-800 text-slate-400 hover:text-slate-200 border border-slate-800 transition-all shrink-0"
+                >
+                  <RotateCcw className="w-3.5 h-3.5" />
+                </button>
+              </div>
+              <p className="text-[11px] text-slate-500 mt-1">
+                Standard folder where decrypted files will be assembled and stored.
+              </p>
+            </div>
+
+            {/* Prompt Save Location Toggle */}
+            <div className="pt-3 border-t border-slate-800/60 flex items-start justify-between">
+              <div className="space-y-0.5">
+                <label htmlFor="promptSaveCheckbox" className="text-xs font-semibold text-slate-200 cursor-pointer">
+                  Always ask where to save each file
+                </label>
+                <p className="text-[11px] text-slate-500">
+                  When enabled, a native "Save As" file dialog appears every time you download a file, letting you choose its destination folder and name.
+                </p>
+              </div>
+              <label className="relative inline-flex items-center cursor-pointer ml-4 mt-0.5">
+                <input
+                  id="promptSaveCheckbox"
+                  type="checkbox"
+                  checked={promptSaveLocation}
+                  onChange={(e) => handleTogglePromptSave(e.target.checked)}
+                  className="sr-only peer"
+                />
+                <div className="w-9 h-5 bg-slate-800 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-emerald-600"></div>
+              </label>
+            </div>
+          </div>
         </div>
 
         {/* Section 3: Vault Targets */}

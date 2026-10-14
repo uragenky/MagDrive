@@ -11,6 +11,8 @@ import {
   FileEntry,
   UploadSessionInfo,
   TransferProgressPayload,
+  DownloadSettings,
+  DownloadResult,
 } from '../types';
 
 // Fast native FileReader blob-to-base64 conversion (avoids large JS string allocations)
@@ -186,6 +188,15 @@ export const api = {
       tree,
       passphrase,
     }),
-  downloadPackage: (packageId: string, passphrase?: string) =>
-    invoke<string>('download_package', { packageId, passphrase }),
+  downloadPackage: (packageId: string, destinationPath: string, passphrase?: string) =>
+    invoke<DownloadResult>('download_package', { packageId, destinationPath, passphrase }),
+  getDownloadSettings: () => invoke<DownloadSettings>('get_download_settings'),
+  saveDownloadSettings: (downloadDir: string, promptSaveLocation: boolean) =>
+    invoke<void>('save_download_settings', { downloadDir, promptSaveLocation }),
+  pickDownloadDirectory: (defaultDir?: string) =>
+    invoke<string | null>('pick_download_directory', { defaultDir }),
+  pickSaveFilePath: (defaultName: string, defaultDir?: string) =>
+    invoke<string | null>('pick_save_file_path', { defaultName, defaultDir }),
+  resolveDownloadPath: (downloadDir: string, fileName: string) =>
+    invoke<string>('resolve_download_path', { downloadDir, fileName }),
 };

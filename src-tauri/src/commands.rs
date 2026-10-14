@@ -1,10 +1,12 @@
 use base64::Engine;
 use futures::StreamExt;
 use serde::{Deserialize, Serialize};
+use sha2::Digest;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Emitter, State};
+use tokio::io::AsyncWriteExt;
 use uuid::Uuid;
 
 use crate::catalog::manifest::{ErasureSchema, FileEntry, PackageManifest, PackageType, Stripe, ChunkRef};
@@ -27,6 +29,18 @@ pub struct UploadSessionInfo {
     pub transfer_id: String,
     pub chunk_size: usize,
     pub total_chunks: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DownloadSettings {
+    pub download_dir: String,
+    pub prompt_save_location: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DownloadResult {
+    pub destination_path: String,
+    pub total_bytes: u64,
 }
 
 #[derive(Debug, Clone)]
@@ -100,6 +114,120 @@ pub fn get_or_derive_master_key(
     }
 
     Ok(key)
+}
+
+// ----------------------------------------------------
+// Download Settings & Dialog Commands
+// ----------------------------------------------------
+
+fn get_system_default_download_dir() -> std::path::PathBuf {
+    dirs::download_dir()
+        .or_else(dirs::home_dir)
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
+}
+
+#[tauri::command]
+pub async fn get_download_settings(state: State<'_, AppState>) -> Result<DownloadSettings, String> {
+    let download_dir = state
+        .db
+        .get_setting("download_dir")
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| get_system_default_download_dir().to_string_lossy().to_string());
+
+    let prompt_save_location = state
+        .db
+        .get_setting("prompt_save_location")
+        .map(|s| s != "false")
+        .unwrap_or(true);
+
+    Ok(DownloadSettings {
+        download_dir,
+        prompt_save_location,
+    })
+}
+
+#[tauri::command]
+pub async fn save_download_settings(
+    state: State<'_, AppState>,
+    download_dir: String,
+    prompt_save_location: bool,
+) -> Result<(), String> {
+    state
+        .db
+        .set_setting("download_dir", download_dir.trim())
+        .map_err(|e| e.to_string())?;
+    state
+        .db
+        .set_setting(
+            "prompt_save_location",
+            if prompt_save_location { "true" } else { "false" },
+        )
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn pick_download_directory(default_dir: Option<String>) -> Result<Option<String>, String> {
+    let mut dialog = rfd::AsyncFileDialog::new().set_title("Select Download Directory");
+    let initial_dir = default_dir
+        .filter(|d| !d.trim().is_empty())
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(get_system_default_download_dir);
+
+    if initial_dir.exists() {
+        dialog = dialog.set_directory(&initial_dir);
+    }
+
+    let folder = dialog.pick_folder().await;
+    Ok(folder.map(|f| f.path().to_string_lossy().to_string()))
+}
+
+#[tauri::command]
+pub async fn pick_save_file_path(
+    default_name: String,
+    default_dir: Option<String>,
+) -> Result<Option<String>, String> {
+    let mut dialog = rfd::AsyncFileDialog::new()
+        .set_title("Save Downloaded File As")
+        .set_file_name(&default_name);
+
+    let initial_dir = default_dir
+        .filter(|d| !d.trim().is_empty())
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(get_system_default_download_dir);
+
+    if initial_dir.exists() {
+        dialog = dialog.set_directory(&initial_dir);
+    }
+
+    let file = dialog.save_file().await;
+    Ok(file.map(|f| f.path().to_string_lossy().to_string()))
+}
+
+#[tauri::command]
+pub fn resolve_download_path(download_dir: String, file_name: String) -> String {
+    let base_dir = std::path::Path::new(&download_dir);
+    let original_path = base_dir.join(&file_name);
+    if !original_path.exists() {
+        return original_path.to_string_lossy().to_string();
+    }
+
+    let p = std::path::Path::new(&file_name);
+    let stem = p.file_stem().and_then(|s| s.to_str()).unwrap_or("file");
+    let ext = p.extension().and_then(|e| e.to_str());
+
+    for counter in 1..10000 {
+        let new_name = match ext {
+            Some(extension) => format!("{} ({}).{}", stem, counter, extension),
+            None => format!("{} ({})", stem, counter),
+        };
+        let candidate = base_dir.join(&new_name);
+        if !candidate.exists() {
+            return candidate.to_string_lossy().to_string();
+        }
+    }
+
+    original_path.to_string_lossy().to_string()
 }
 
 // ----------------------------------------------------
@@ -775,6 +903,7 @@ pub async fn upload_file_package(
         transferred_bytes: 0,
         status: "transferring".to_string(),
         error_message: None,
+        destination_path: None,
         updated_at: chrono::Utc::now().timestamp(),
     };
     let _ = state.db.upsert_transfer(&record);
@@ -945,6 +1074,7 @@ pub async fn upload_file_package(
         transferred_bytes: total_size,
         status: "completed".to_string(),
         error_message: None,
+        destination_path: None,
         updated_at: chrono::Utc::now().timestamp(),
     });
 
@@ -970,8 +1100,9 @@ pub async fn download_package(
     app: AppHandle,
     state: State<'_, AppState>,
     package_id: String,
+    destination_path: String,
     passphrase: Option<String>,
-) -> Result<String, String> {
+) -> Result<DownloadResult, String> {
     let pkg = state
         .db
         .get_package(&package_id)
@@ -994,9 +1125,49 @@ pub async fn download_package(
 
     let client = get_drive_client(&state.db).await?;
 
-    let mut assembled_bytes = Vec::with_capacity(pkg.total_size as usize);
+    let dest_path = std::path::PathBuf::from(&destination_path);
+    if let Some(parent) = dest_path.parent() {
+        let _ = tokio::fs::create_dir_all(parent).await;
+    }
+
+    let mut dest_file = tokio::fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(true)
+        .open(&dest_path)
+        .await
+        .map_err(|e| format!("Failed to open destination file {}: {}", destination_path, e))?;
+
+    let transfer_id = format!("dl_{}", Uuid::new_v4().simple());
+    let record = TransferRecord {
+        id: transfer_id.clone(),
+        package_id: package_id.clone(),
+        name: pkg.name.clone(),
+        transfer_type: "download".to_string(),
+        total_bytes: pkg.total_size,
+        transferred_bytes: 0,
+        status: "transferring".to_string(),
+        error_message: None,
+        destination_path: Some(destination_path.clone()),
+        updated_at: chrono::Utc::now().timestamp(),
+    };
+    let _ = state.db.upsert_transfer(&record);
+
+    let mut hasher = sha2::Sha256::new();
+    let mut transferred_bytes: u64 = 0;
+    let start_time = std::time::Instant::now();
 
     for (s_idx, stripe) in pkg.stripes.iter().enumerate() {
+        // Check if transfer was cancelled
+        if let Ok(Some(tx)) = state.db.get_transfer(&transfer_id) {
+            if tx.status == "cancelled" {
+                let _ = dest_file.flush().await;
+                drop(dest_file);
+                let _ = tokio::fs::remove_file(&dest_path).await;
+                return Err("Download cancelled by user.".into());
+            }
+        }
+
         let total_shards = pkg.erasure_schema.data_shards + pkg.erasure_schema.parity_shards;
         let mut available_shards: Vec<Option<Vec<u8>>> = vec![None; total_shards];
 
@@ -1026,7 +1197,11 @@ pub async fn download_package(
         // Reconstruct stripe
         let stripe_len = if s_idx == pkg.stripes.len() - 1 {
             let rem = (pkg.total_size as usize) % pkg.chunk_size;
-            if rem == 0 { pkg.chunk_size } else { rem }
+            if rem == 0 {
+                pkg.chunk_size
+            } else {
+                rem
+            }
         } else {
             pkg.chunk_size
         };
@@ -1039,28 +1214,97 @@ pub async fn download_package(
         )
         .map_err(|e| format!("Failed to reconstruct stripe {}: {}", s_idx, e))?;
 
-        assembled_bytes.extend_from_slice(&reconstructed);
+        dest_file
+            .write_all(&reconstructed)
+            .await
+            .map_err(|e| format!("Failed to write stripe {} to destination file: {}", s_idx, e))?;
 
-        let _ = app.emit("transfer-progress", serde_json::json!({
-            "package_id": package_id,
-            "transfer_id": package_id,
-            "stage": "downloading",
-            "transferred": assembled_bytes.len(),
-            "transferred_bytes": assembled_bytes.len(),
-            "total": pkg.total_size,
-            "total_bytes": pkg.total_size,
-            "status": "transferring"
-        }));
+        hasher.update(&reconstructed);
+        transferred_bytes += reconstructed.len() as u64;
+
+        let elapsed_secs = start_time.elapsed().as_secs_f64();
+        let speed_bps = if elapsed_secs > 0.05 {
+            (transferred_bytes as f64 / elapsed_secs) as u64
+        } else {
+            0
+        };
+        let remaining_bytes = pkg.total_size.saturating_sub(transferred_bytes);
+        let eta_seconds = if speed_bps > 0 {
+            (remaining_bytes as f64 / speed_bps as f64).ceil() as u64
+        } else {
+            0
+        };
+
+        let _ = state
+            .db
+            .update_transfer_progress(&transfer_id, transferred_bytes);
+
+        let _ = app.emit(
+            "transfer-progress",
+            serde_json::json!({
+                "package_id": package_id,
+                "transfer_id": transfer_id,
+                "stage": "downloading",
+                "current_shard": s_idx + 1,
+                "total_shards": pkg.stripes.len(),
+                "transferred": transferred_bytes,
+                "transferred_bytes": transferred_bytes,
+                "total": pkg.total_size,
+                "total_bytes": pkg.total_size,
+                "speed_bps": speed_bps,
+                "eta_seconds": eta_seconds,
+                "status": "transferring"
+            }),
+        );
     }
 
+    dest_file
+        .flush()
+        .await
+        .map_err(|e| format!("Failed to flush destination file: {}", e))?;
+    drop(dest_file);
+
     // Verify final SHA-256 integrity
-    let actual_sha = compute_sha256(&assembled_bytes);
+    let actual_sha = hex::encode(hasher.finalize());
     if actual_sha != pkg.original_sha256 {
+        let _ = tokio::fs::remove_file(&dest_path).await;
+        let _ = state.db.update_transfer_status(
+            &transfer_id,
+            "failed",
+            Some("File integrity corrupted: SHA-256 checksum mismatch."),
+        );
         return Err("File integrity corrupted: SHA-256 checksum mismatch.".into());
     }
 
-    let b64 = base64::engine::general_purpose::STANDARD.encode(&assembled_bytes);
-    Ok(b64)
+    let _ = state
+        .db
+        .update_transfer_progress(&transfer_id, pkg.total_size);
+    let _ = state
+        .db
+        .update_transfer_status(&transfer_id, "completed", None);
+
+    let _ = app.emit(
+        "transfer-progress",
+        serde_json::json!({
+            "package_id": package_id,
+            "transfer_id": transfer_id,
+            "stage": "completed",
+            "current_shard": pkg.stripes.len(),
+            "total_shards": pkg.stripes.len(),
+            "transferred": pkg.total_size,
+            "transferred_bytes": pkg.total_size,
+            "total": pkg.total_size,
+            "total_bytes": pkg.total_size,
+            "speed_bps": 0,
+            "eta_seconds": 0,
+            "status": "completed"
+        }),
+    );
+
+    Ok(DownloadResult {
+        destination_path: destination_path.clone(),
+        total_bytes: pkg.total_size,
+    })
 }
 
 // ----------------------------------------------------
@@ -1110,6 +1354,7 @@ pub async fn init_upload_session(
         transferred_bytes: 0,
         status: "transferring".to_string(),
         error_message: None,
+        destination_path: None,
         updated_at: chrono::Utc::now().timestamp(),
     };
     state.db.upsert_transfer(&record).map_err(|e| e.to_string())?;

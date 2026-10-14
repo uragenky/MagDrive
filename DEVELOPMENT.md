@@ -149,10 +149,27 @@ magdrive/
 
 - **SQLite Database**: Located at `%APPDATA%/magdrive/magdrive.db` (Windows) or `~/.local/share/magdrive/magdrive.db` (Linux).
 - **Tables**:
-  - `settings`: Key-value storage for active vault ID, GCP credentials, and OAuth tokens.
+  - `settings`: Key-value storage for active vault ID, GCP credentials, OAuth tokens, and download preferences (`download_dir`, `prompt_save_location`).
   - `vaults`: Configuration of registered vaults, target IDs, salt, and verification tags.
   - `packages`: Cached metadata of uploaded files and packages.
-  - `transfers`: Journal of active and historical upload/download operations with transfer progress.
+  - `transfers`: Journal of active and historical upload/download operations with transfer progress and `destination_path`.
+
+---
+
+### 2.6 Direct-to-Disk Streaming Download & Save Management
+
+- **Direct-to-Disk Streaming**:
+  - Unlike browser-based Base64 downloads that load gigabytes into memory, MagDrive reconstructs each stripe via Reed-Solomon and writes it directly to disk via `tokio::fs::File`.
+  - Maintains flat ~32 MB memory consumption throughout the entire download session.
+  - Real-time progress events emit current shard, total shards, bytes transferred, speed (`⚡ MB/s`), and ETA (`⏱ ~seconds`).
+- **Incremental SHA-256 Checksum**:
+  - The hash digest is fed stripe-by-stripe. If a mismatch is detected at finalization, the partial file is safely purged and marked as corrupted in the transfer log.
+- **In-App & Native Save Dialogs**:
+  - Integrated `DownloadModal` provides visual confirmation of file name, size, SHA-256, and destination path.
+  - Native file picker uses `rfd` configured with `features = ["tokio", "gtk3", "common-controls-v6"]`, bypassing external DBus desktop portal daemons for 100% reliability on Linux, Windows, and macOS.
+  - Automatic collision-safe naming (`resolve_download_path`) appends incremental suffixes (`(1)`, `(2)`) if a file of the same name exists.
+- **Post-Download Quick Actions**:
+  - Interactive toast and Transfers queue entries provide one-click "Show in Folder" (`revealItemInDir`) and "Open File" (`openPath`) actions.
 
 ---
 
@@ -190,7 +207,12 @@ magdrive/
 | `delete_transfer` | `transferId: String` | `()` | Removes transfer record from local SQLite history. |
 | `clear_finished_transfers` | None | `()` | Clears all completed, failed, and cancelled transfers. |
 | `upload_file_package`| `fileName, bytesB64, isFolder, tree, passphrase` | `String` (pkg_id) | Direct monolithic upload (for small files/tests). |
-| `download_package` | `package_id, passphrase` | `String` (Base64) | Downloads shards, auto-reconstructs, decrypts. |
+| `download_package` | `package_id, destination_path, passphrase` | `DownloadResult` | Downloads shards, auto-reconstructs, streams directly to disk. |
+| `get_download_settings` | None | `DownloadSettings` | Retrieves default download folder and prompt preference. |
+| `save_download_settings` | `download_dir, prompt_save_location` | `()` | Saves download location & prompt behavior to SQLite. |
+| `pick_download_directory`| `default_dir: Option<String>` | `Option<String>` | Native directory selection dialog. |
+| `pick_save_file_path` | `default_name: String, default_dir: Option<String>` | `Option<String>` | Native "Save As" file popup dialog with suggested name. |
+| `resolve_download_path` | `download_dir: String, file_name: String` | `String` | Generates collision-safe path for automatic downloads. |
 
 ---
 

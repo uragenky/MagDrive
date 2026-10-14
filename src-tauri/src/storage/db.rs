@@ -27,6 +27,7 @@ pub struct TransferRecord {
     pub transferred_bytes: u64,
     pub status: String,        // "pending", "transferring", "paused", "completed", "failed"
     pub error_message: Option<String>,
+    pub destination_path: Option<String>,
     pub updated_at: i64,
 }
 
@@ -100,10 +101,15 @@ impl Database {
                 transferred_bytes INTEGER NOT NULL DEFAULT 0,
                 status TEXT NOT NULL,
                 error_message TEXT,
+                destination_path TEXT,
                 updated_at INTEGER NOT NULL
             );
             "#,
         )?;
+
+        // Non-destructive migration for existing databases
+        let _ = conn.execute("ALTER TABLE transfers ADD COLUMN destination_path TEXT", []);
+
         Ok(())
     }
 
@@ -404,10 +410,10 @@ impl Database {
         let conn = self.conn.lock().unwrap();
         conn.execute(
             r#"INSERT INTO transfers
-               (id, package_id, name, transfer_type, total_bytes, transferred_bytes, status, error_message, updated_at)
-               VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+               (id, package_id, name, transfer_type, total_bytes, transferred_bytes, status, error_message, destination_path, updated_at)
+               VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
                ON CONFLICT(id) DO UPDATE SET
-               transferred_bytes=?6, status=?7, error_message=?8, updated_at=?9"#,
+               transferred_bytes=?6, status=?7, error_message=?8, destination_path=COALESCE(?9, transfers.destination_path), updated_at=?10"#,
             params![
                 item.id,
                 item.package_id,
@@ -417,6 +423,7 @@ impl Database {
                 item.transferred_bytes as i64,
                 item.status,
                 item.error_message,
+                item.destination_path,
                 item.updated_at
             ],
         )?;
@@ -426,7 +433,7 @@ impl Database {
     pub fn list_transfers(&self) -> Result<Vec<TransferRecord>, StorageError> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT id, package_id, name, transfer_type, total_bytes, transferred_bytes, status, error_message, updated_at FROM transfers ORDER BY updated_at DESC",
+            "SELECT id, package_id, name, transfer_type, total_bytes, transferred_bytes, status, error_message, destination_path, updated_at FROM transfers ORDER BY updated_at DESC",
         )?;
         let rows = stmt.query_map([], |row| {
             let id: String = row.get(0)?;
@@ -437,7 +444,8 @@ impl Database {
             let transferred_bytes: i64 = row.get(5)?;
             let status: String = row.get(6)?;
             let error_message: Option<String> = row.get(7)?;
-            let updated_at: i64 = row.get(8)?;
+            let destination_path: Option<String> = row.get(8)?;
+            let updated_at: i64 = row.get(9)?;
 
             Ok(TransferRecord {
                 id,
@@ -448,6 +456,7 @@ impl Database {
                 transferred_bytes: transferred_bytes as u64,
                 status,
                 error_message,
+                destination_path,
                 updated_at,
             })
         })?;
@@ -462,7 +471,7 @@ impl Database {
     pub fn get_transfer(&self, id: &str) -> Result<Option<TransferRecord>, StorageError> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT id, package_id, name, transfer_type, total_bytes, transferred_bytes, status, error_message, updated_at FROM transfers WHERE id = ?1",
+            "SELECT id, package_id, name, transfer_type, total_bytes, transferred_bytes, status, error_message, destination_path, updated_at FROM transfers WHERE id = ?1",
         )?;
         let mut rows = stmt.query_map(params![id], |row| {
             let id: String = row.get(0)?;
@@ -473,7 +482,8 @@ impl Database {
             let transferred_bytes: i64 = row.get(5)?;
             let status: String = row.get(6)?;
             let error_message: Option<String> = row.get(7)?;
-            let updated_at: i64 = row.get(8)?;
+            let destination_path: Option<String> = row.get(8)?;
+            let updated_at: i64 = row.get(9)?;
 
             Ok(TransferRecord {
                 id,
@@ -484,6 +494,7 @@ impl Database {
                 transferred_bytes: transferred_bytes as u64,
                 status,
                 error_message,
+                destination_path,
                 updated_at,
             })
         })?;
@@ -521,6 +532,20 @@ impl Database {
         conn.execute(
             "UPDATE transfers SET status = ?2, error_message = ?3, updated_at = ?4 WHERE id = ?1",
             params![id, status, error_message, now],
+        )?;
+        Ok(())
+    }
+
+    pub fn update_transfer_progress(
+        &self,
+        id: &str,
+        transferred_bytes: u64,
+    ) -> Result<(), StorageError> {
+        let conn = self.conn.lock().unwrap();
+        let now = chrono::Utc::now().timestamp();
+        conn.execute(
+            "UPDATE transfers SET transferred_bytes = ?2, updated_at = ?3 WHERE id = ?1",
+            params![id, transferred_bytes, now],
         )?;
         Ok(())
     }
@@ -563,6 +588,7 @@ mod tests {
             transferred_bytes: 500,
             status: "transferring".to_string(),
             error_message: None,
+            destination_path: None,
             updated_at: 1000,
         };
         db.upsert_transfer(&tx).unwrap();
