@@ -153,7 +153,11 @@ export function App() {
 
       // 3. Otherwise, automatically download to default download folder
       const destinationPath = await api.resolveDownloadPath(settings.download_dir, fileName);
-      await executeDownload(packageId, destinationPath, fileName);
+      try {
+        await executeDownload(packageId, destinationPath, fileName);
+      } catch (err: any) {
+        alert('Failed to download file: ' + (err?.toString() || ''));
+      }
     } catch (err: any) {
       alert('Failed to prepare download: ' + (err?.toString() || ''));
     }
@@ -165,16 +169,14 @@ export function App() {
       const result = await api.downloadPackage(packageId, destinationPath);
       await refreshTransfers();
 
-      // Close modal if open
-      setDownloadModalTarget(null);
-
       // Show success toast with quick action to open folder or file
       setDownloadToast({
         fileName: displayName || destinationPath.split(/[/\\]/).pop() || 'file',
         destinationPath: result.destination_path,
       });
     } catch (err: any) {
-      alert('Failed to download file: ' + (err?.toString() || ''));
+      console.error('Download error:', err);
+      throw err;
     } finally {
       setIsDownloading(null);
     }
@@ -369,6 +371,10 @@ export function App() {
           onConfirmDownload={(destPath) =>
             executeDownload(downloadModalTarget.packageId, destPath, downloadModalTarget.fileName)
           }
+          onNavigateToTransfers={() => {
+            setDownloadModalTarget(null);
+            setActiveTab('transfers');
+          }}
           isDownloading={isDownloading === downloadModalTarget.packageId}
         />
       )}

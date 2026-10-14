@@ -156,16 +156,22 @@ magdrive/
 
 ---
 
-### 2.6 Direct-to-Disk Streaming Download & Save Management
+### 2.6 High-Performance Direct-to-Disk Download Pipeline
 
-- **Direct-to-Disk Streaming**:
-  - Unlike browser-based Base64 downloads that load gigabytes into memory, MagDrive reconstructs each stripe via Reed-Solomon and writes it directly to disk via `tokio::fs::File`.
-  - Maintains flat ~32 MB memory consumption throughout the entire download session.
-  - Real-time progress events emit current shard, total shards, bytes transferred, speed (`⚡ MB/s`), and ETA (`⏱ ~seconds`).
+- **Multi-Stripe Concurrent Pipelining**:
+  - Downloads up to 2 stripes concurrently via `futures::stream::StreamExt::buffered(2)`.
+  - While Stripe `N` is writing to disk or finishing parity decoding, Stripe `N+1` is already in-flight over the network, completely eliminating idle network gaps between stripes.
+  - Guarantees strict FIFO sequential ordering to disk with bounded memory consumption (~64 MB RAM).
+- **Opportunistic Early Decoding**:
+  - For RS 2+1 schemas (2 data shards + 1 parity shard), exactly 2 shards are needed to recover 100% of the stripe.
+  - As soon as any 2 valid shards finish downloading and decrypting, the 3rd shard is immediately cancelled and dropped.
+  - Saves 33.3% of network data transfer and eliminates tail latency from slow or lagging Google Drive connections.
+- **Multi-Core Cryptography Offloading**:
+  - AES-256-GCM chunk decryption and Reed-Solomon polynomial reconstruction execute on physical CPU core threadpools via `tokio::task::spawn_blocking`, keeping the Tokio async reactor unblocked for maximum HTTP throughput.
 - **Incremental SHA-256 Checksum**:
   - The hash digest is fed stripe-by-stripe. If a mismatch is detected at finalization, the partial file is safely purged and marked as corrupted in the transfer log.
 - **In-App & Native Save Dialogs**:
-  - Integrated `DownloadModal` provides visual confirmation of file name, size, SHA-256, and destination path.
+  - Integrated `DownloadModal` provides visual confirmation of file name, size, SHA-256, live speed/ETA progress, backgrounding, and destination path.
   - Native file picker uses `rfd` configured with `features = ["tokio", "gtk3", "common-controls-v6"]`, bypassing external DBus desktop portal daemons for 100% reliability on Linux, Windows, and macOS.
   - Automatic collision-safe naming (`resolve_download_path`) appends incremental suffixes (`(1)`, `(2)`) if a file of the same name exists.
 - **Post-Download Quick Actions**:

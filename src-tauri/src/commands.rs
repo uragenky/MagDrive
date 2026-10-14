@@ -1095,6 +1095,189 @@ pub async fn upload_file_package(
     Ok(package_id)
 }
 
+async fn download_and_reconstruct_stripe(
+    s_idx: usize,
+    stripe: Stripe,
+    total_stripes: usize,
+    client: DriveClient,
+    key: [u8; 32],
+    schema: ErasureSchema,
+    total_size: u64,
+    chunk_size: usize,
+    app: AppHandle,
+    package_id: String,
+    transfer_id: String,
+    db: Database,
+    completed_shards: Arc<AtomicUsize>,
+    total_required_shards: usize,
+    start_time: std::time::Instant,
+) -> Result<Vec<u8>, String> {
+    // Check if transfer was cancelled
+    if let Ok(Some(tx)) = db.get_transfer(&transfer_id) {
+        if tx.status == "cancelled" {
+            return Err("Download cancelled by user.".into());
+        }
+    }
+
+    let total_shards = schema.data_shards + schema.parity_shards;
+    let needed_shards = schema.data_shards;
+    let mut available_shards: Vec<Option<Vec<u8>>> = vec![None; total_shards];
+
+    let mut futures = futures::stream::FuturesUnordered::new();
+    for chunk in stripe.chunks {
+        if chunk.shard_index < total_shards {
+            let client_clone = client.clone();
+            let file_id = chunk.file_id;
+            let shard_idx = chunk.shard_index;
+            let key_clone = key;
+            futures.push(async move {
+                let res = client_clone.download_file(&file_id).await;
+                match res {
+                    Ok(encrypted_bytes) => {
+                        let dec_res = tokio::task::spawn_blocking(move || {
+                            decrypt_chunk(&encrypted_bytes, &key_clone)
+                        })
+                        .await;
+
+                        match dec_res {
+                            Ok(Ok(decrypted)) => Ok((shard_idx, decrypted)),
+                            Ok(Err(e)) => Err(format!("Decryption error on shard {}: {}", shard_idx, e)),
+                            Err(e) => Err(format!("Task error on shard {}: {}", shard_idx, e)),
+                        }
+                    }
+                    Err(e) => Err(format!("Download error on shard {}: {}", shard_idx, e)),
+                }
+            });
+        }
+    }
+
+    let mut valid_count = 0;
+    while let Some(res) = futures.next().await {
+        // Check cancellation mid-flight
+        if let Ok(Some(tx)) = db.get_transfer(&transfer_id) {
+            if tx.status == "cancelled" {
+                return Err("Download cancelled by user.".into());
+            }
+        }
+
+        match res {
+            Ok((shard_idx, decrypted_shard)) => {
+                available_shards[shard_idx] = Some(decrypted_shard);
+                valid_count += 1;
+
+                let completed = completed_shards.fetch_add(1, Ordering::Relaxed) + 1;
+                let elapsed_secs = start_time.elapsed().as_secs_f64();
+                let est_transferred = if total_required_shards > 0 {
+                    ((total_size as f64 * (completed as f64 / total_required_shards as f64)) as u64)
+                        .min(total_size)
+                } else {
+                    0
+                };
+                let speed_bps = if elapsed_secs > 0.05 {
+                    (est_transferred as f64 / elapsed_secs) as u64
+                } else {
+                    0
+                };
+                let remaining_bytes = total_size.saturating_sub(est_transferred);
+                let eta_seconds = if speed_bps > 0 {
+                    (remaining_bytes as f64 / speed_bps as f64).ceil() as u64
+                } else {
+                    0
+                };
+
+                let _ = app.emit(
+                    "transfer-progress",
+                    serde_json::json!({
+                        "package_id": package_id,
+                        "transfer_id": transfer_id,
+                        "stage": "downloading",
+                        "current_shard": completed,
+                        "total_shards": total_required_shards,
+                        "transferred": est_transferred,
+                        "transferred_bytes": est_transferred,
+                        "total": total_size,
+                        "total_bytes": total_size,
+                        "speed_bps": speed_bps,
+                        "eta_seconds": eta_seconds,
+                        "target_label": format!("Downloading shard {}/{} (Stripe {}/{})...", completed, total_required_shards, s_idx + 1, total_stripes),
+                        "status": "transferring"
+                    }),
+                );
+
+                // Early completion: once we have collected needed_shards, stop immediately and drop remaining requests
+                if valid_count >= needed_shards {
+                    break;
+                }
+            }
+            Err(err_msg) => {
+                eprintln!("Shard download warning: {}", err_msg);
+            }
+        }
+    }
+
+    if valid_count < needed_shards {
+        let err_msg = format!(
+            "Insufficient shards for stripe {}: obtained {}/{} (requires at least {} data shards)",
+            s_idx + 1, valid_count, total_shards, needed_shards
+        );
+        let _ = db.update_transfer_status(&transfer_id, "failed", Some(&err_msg));
+        let _ = app.emit(
+            "transfer-progress",
+            serde_json::json!({
+                "package_id": package_id,
+                "transfer_id": transfer_id,
+                "stage": "downloading",
+                "status": "failed",
+                "error_message": &err_msg,
+                "total": total_size,
+            }),
+        );
+        return Err(err_msg);
+    }
+
+    let stripe_len = if s_idx == total_stripes - 1 {
+        let rem = (total_size as usize) % chunk_size;
+        if rem == 0 {
+            chunk_size
+        } else {
+            rem
+        }
+    } else {
+        chunk_size
+    };
+
+    let data_shards = schema.data_shards;
+    let parity_shards = schema.parity_shards;
+    let reconstructed = tokio::task::spawn_blocking(move || {
+        reconstruct(
+            &mut available_shards,
+            data_shards,
+            parity_shards,
+            stripe_len,
+        )
+    })
+    .await
+    .map_err(|e| format!("Task execution error: {}", e))?
+    .map_err(|e| {
+        let err_msg = format!("Failed to reconstruct stripe {}: {}", s_idx, e);
+        let _ = db.update_transfer_status(&transfer_id, "failed", Some(&err_msg));
+        let _ = app.emit(
+            "transfer-progress",
+            serde_json::json!({
+                "package_id": package_id,
+                "transfer_id": transfer_id,
+                "stage": "downloading",
+                "status": "failed",
+                "error_message": &err_msg,
+                "total": total_size,
+            }),
+        );
+        err_msg
+    })?;
+
+    Ok(reconstructed)
+}
+
 #[tauri::command]
 pub async fn download_package(
     app: AppHandle,
@@ -1153,12 +1336,77 @@ pub async fn download_package(
     };
     let _ = state.db.upsert_transfer(&record);
 
-    let mut hasher = sha2::Sha256::new();
-    let mut transferred_bytes: u64 = 0;
+    let total_stripes = pkg.stripes.len();
+    let needed_shards_per_stripe = pkg.erasure_schema.data_shards;
+    let total_required_shards = total_stripes * needed_shards_per_stripe;
+    let total_required_shards = if total_required_shards == 0 { 1 } else { total_required_shards };
+
+    // Emit initial starting event immediately so frontend knows download has begun
+    let _ = app.emit(
+        "transfer-progress",
+        serde_json::json!({
+            "package_id": package_id,
+            "transfer_id": transfer_id,
+            "stage": "downloading",
+            "current_shard": 0,
+            "total_shards": total_required_shards,
+            "transferred": 0,
+            "transferred_bytes": 0,
+            "total": pkg.total_size,
+            "total_bytes": pkg.total_size,
+            "speed_bps": 0,
+            "eta_seconds": 0,
+            "target_label": "Connecting to storage nodes...",
+            "status": "transferring"
+        }),
+    );
+
+    let completed_shards = Arc::new(AtomicUsize::new(0));
     let start_time = std::time::Instant::now();
 
-    for (s_idx, stripe) in pkg.stripes.iter().enumerate() {
-        // Check if transfer was cancelled
+    let stripe_stream = futures::stream::iter(pkg.stripes.into_iter().enumerate())
+        .map(|(s_idx, stripe)| {
+            let client = client.clone();
+            let key = key;
+            let schema = pkg.erasure_schema.clone();
+            let total_size = pkg.total_size;
+            let chunk_size = pkg.chunk_size;
+            let app = app.clone();
+            let package_id = package_id.clone();
+            let transfer_id = transfer_id.clone();
+            let db = state.db.clone();
+            let completed_shards = completed_shards.clone();
+
+            async move {
+                download_and_reconstruct_stripe(
+                    s_idx,
+                    stripe,
+                    total_stripes,
+                    client,
+                    key,
+                    schema,
+                    total_size,
+                    chunk_size,
+                    app,
+                    package_id,
+                    transfer_id,
+                    db,
+                    completed_shards,
+                    total_required_shards,
+                    start_time,
+                )
+                .await
+            }
+        })
+        .buffered(2); // Stream 2 stripes concurrently
+
+    tokio::pin!(stripe_stream);
+
+    let mut hasher = sha2::Sha256::new();
+    let mut written_bytes: u64 = 0;
+
+    while let Some(stripe_res) = stripe_stream.next().await {
+        // Check cancellation
         if let Ok(Some(tx)) = state.db.get_transfer(&transfer_id) {
             if tx.status == "cancelled" {
                 let _ = dest_file.flush().await;
@@ -1168,112 +1416,81 @@ pub async fn download_package(
             }
         }
 
-        let total_shards = pkg.erasure_schema.data_shards + pkg.erasure_schema.parity_shards;
-        let mut available_shards: Vec<Option<Vec<u8>>> = vec![None; total_shards];
-
-        // Download available chunks with auto-recovery concurrently
-        let mut chunk_futures = Vec::new();
-        for chunk in &stripe.chunks {
-            if chunk.shard_index < total_shards {
-                let client_clone = client.clone();
-                let file_id = chunk.file_id.clone();
-                let shard_idx = chunk.shard_index;
-                chunk_futures.push(async move {
-                    let res = client_clone.download_file(&file_id).await;
-                    (shard_idx, res)
-                });
+        let reconstructed = match stripe_res {
+            Ok(data) => data,
+            Err(e) => {
+                let _ = dest_file.flush().await;
+                drop(dest_file);
+                let _ = tokio::fs::remove_file(&dest_path).await;
+                return Err(e);
             }
-        }
-
-        let download_results = futures::future::join_all(chunk_futures).await;
-        for (shard_idx, res) in download_results {
-            if let Ok(encrypted_bytes) = res {
-                if let Ok(decrypted_shard) = decrypt_chunk(&encrypted_bytes, &key) {
-                    available_shards[shard_idx] = Some(decrypted_shard);
-                }
-            }
-        }
-
-        // Reconstruct stripe
-        let stripe_len = if s_idx == pkg.stripes.len() - 1 {
-            let rem = (pkg.total_size as usize) % pkg.chunk_size;
-            if rem == 0 {
-                pkg.chunk_size
-            } else {
-                rem
-            }
-        } else {
-            pkg.chunk_size
         };
-
-        let reconstructed = reconstruct(
-            &mut available_shards,
-            pkg.erasure_schema.data_shards,
-            pkg.erasure_schema.parity_shards,
-            stripe_len,
-        )
-        .map_err(|e| format!("Failed to reconstruct stripe {}: {}", s_idx, e))?;
 
         dest_file
             .write_all(&reconstructed)
             .await
-            .map_err(|e| format!("Failed to write stripe {} to destination file: {}", s_idx, e))?;
+            .map_err(|e| {
+                let err_msg = format!("Failed to write stripe to destination file: {}", e);
+                let _ = state.db.update_transfer_status(&transfer_id, "failed", Some(&err_msg));
+                err_msg
+            })?;
 
         hasher.update(&reconstructed);
-        transferred_bytes += reconstructed.len() as u64;
-
-        let elapsed_secs = start_time.elapsed().as_secs_f64();
-        let speed_bps = if elapsed_secs > 0.05 {
-            (transferred_bytes as f64 / elapsed_secs) as u64
-        } else {
-            0
-        };
-        let remaining_bytes = pkg.total_size.saturating_sub(transferred_bytes);
-        let eta_seconds = if speed_bps > 0 {
-            (remaining_bytes as f64 / speed_bps as f64).ceil() as u64
-        } else {
-            0
-        };
+        written_bytes += reconstructed.len() as u64;
 
         let _ = state
             .db
-            .update_transfer_progress(&transfer_id, transferred_bytes);
+            .update_transfer_progress(&transfer_id, written_bytes);
+    }
 
+    dest_file
+        .flush()
+        .await
+        .map_err(|e| {
+            let err_msg = format!("Failed to flush destination file: {}", e);
+            let _ = state.db.update_transfer_status(&transfer_id, "failed", Some(&err_msg));
+            err_msg
+        })?;
+    drop(dest_file);
+
+    let _ = app.emit(
+        "transfer-progress",
+        serde_json::json!({
+            "package_id": package_id,
+            "transfer_id": transfer_id,
+            "stage": "verifying",
+            "current_shard": total_required_shards,
+            "total_shards": total_required_shards,
+            "transferred": written_bytes,
+            "transferred_bytes": written_bytes,
+            "total": pkg.total_size,
+            "total_bytes": pkg.total_size,
+            "speed_bps": 0,
+            "eta_seconds": 0,
+            "target_label": "Verifying SHA-256 cryptographic integrity...",
+            "status": "transferring"
+        }),
+    );
+
+    // Verify final SHA-256 integrity
+    let actual_sha = hex::encode(hasher.finalize());
+    if actual_sha != pkg.original_sha256 {
+        let _ = tokio::fs::remove_file(&dest_path).await;
+        let err_msg = "File integrity corrupted: SHA-256 checksum mismatch.";
+        let _ = state.db.update_transfer_status(&transfer_id, "failed", Some(err_msg));
         let _ = app.emit(
             "transfer-progress",
             serde_json::json!({
                 "package_id": package_id,
                 "transfer_id": transfer_id,
                 "stage": "downloading",
-                "current_shard": s_idx + 1,
-                "total_shards": pkg.stripes.len(),
-                "transferred": transferred_bytes,
-                "transferred_bytes": transferred_bytes,
+                "status": "failed",
+                "error_message": err_msg,
+                "transferred": written_bytes,
                 "total": pkg.total_size,
-                "total_bytes": pkg.total_size,
-                "speed_bps": speed_bps,
-                "eta_seconds": eta_seconds,
-                "status": "transferring"
             }),
         );
-    }
-
-    dest_file
-        .flush()
-        .await
-        .map_err(|e| format!("Failed to flush destination file: {}", e))?;
-    drop(dest_file);
-
-    // Verify final SHA-256 integrity
-    let actual_sha = hex::encode(hasher.finalize());
-    if actual_sha != pkg.original_sha256 {
-        let _ = tokio::fs::remove_file(&dest_path).await;
-        let _ = state.db.update_transfer_status(
-            &transfer_id,
-            "failed",
-            Some("File integrity corrupted: SHA-256 checksum mismatch."),
-        );
-        return Err("File integrity corrupted: SHA-256 checksum mismatch.".into());
+        return Err(err_msg.into());
     }
 
     let _ = state
@@ -1289,15 +1506,16 @@ pub async fn download_package(
             "package_id": package_id,
             "transfer_id": transfer_id,
             "stage": "completed",
-            "current_shard": pkg.stripes.len(),
-            "total_shards": pkg.stripes.len(),
+            "current_shard": total_required_shards,
+            "total_shards": total_required_shards,
             "transferred": pkg.total_size,
             "transferred_bytes": pkg.total_size,
             "total": pkg.total_size,
             "total_bytes": pkg.total_size,
             "speed_bps": 0,
             "eta_seconds": 0,
-            "status": "completed"
+            "status": "completed",
+            "destination_path": destination_path,
         }),
     );
 
