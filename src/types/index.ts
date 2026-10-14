@@ -69,6 +69,8 @@ export interface DrivePermissionItem {
   photo_link?: string;
 }
 
+export type TransferStatus = 'transferring' | 'paused' | 'completed' | 'failed' | 'cancelled';
+
 export interface TransferRecord {
   id: string;
   package_id: string;
@@ -76,9 +78,16 @@ export interface TransferRecord {
   transfer_type: string;
   total_bytes: number;
   transferred_bytes: number;
-  status: string;
+  status: TransferStatus | string;
   error_message?: string;
   updated_at: number;
+}
+
+export interface UploadSessionInfo {
+  session_id: string;
+  transfer_id: string;
+  chunk_size: number;
+  total_chunks: number;
 }
 
 export interface GcpCredentials {

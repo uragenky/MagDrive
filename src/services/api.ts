@@ -8,6 +8,7 @@ import {
   VaultRecord,
   VaultTarget,
   FileEntry,
+  UploadSessionInfo,
 } from '../types';
 
 export const api = {
@@ -48,6 +49,94 @@ export const api = {
 
   // Transfers
   listTransfers: () => invoke<TransferRecord[]>('list_transfers'),
+  pauseTransfer: (transferId: string) => invoke<void>('pause_transfer', { transferId }),
+  resumeTransfer: (transferId: string) => invoke<void>('resume_transfer', { transferId }),
+  cancelTransfer: (transferId: string) => invoke<void>('cancel_transfer', { transferId }),
+  deleteTransfer: (transferId: string) => invoke<void>('delete_transfer', { transferId }),
+  clearFinishedTransfers: () => invoke<void>('clear_finished_transfers'),
+
+  // Streaming Upload API
+  initUploadSession: (
+    fileName: string,
+    totalBytes: number,
+    chunkSize: number,
+    isFolder: boolean,
+    passphrase?: string
+  ) =>
+    invoke<UploadSessionInfo>('init_upload_session', {
+      fileName,
+      totalBytes,
+      chunkSize,
+      isFolder,
+      passphrase,
+    }),
+  uploadChunkPart: (sessionId: string, chunkIndex: number, chunkBytesBase64: string) =>
+    invoke<void>('upload_chunk_part', {
+      sessionId,
+      chunkIndex,
+      chunkBytesBase64,
+    }),
+  finishUploadSession: (sessionId: string) =>
+    invoke<string>('finish_upload_session', { sessionId }),
+
+  // Helper for adaptive chunked upload
+  uploadFileStream: async (
+    file: File,
+    passphrase: string | undefined,
+    onProgress?: (percent: number, currentChunk: number, totalChunks: number) => void
+  ): Promise<string> => {
+    // Adaptive chunk size:
+    // < 100 MB -> 16 MB
+    // 100 MB - 1 GB -> 32 MB
+    // > 1 GB -> 64 MB
+    let chunkSize = 32 * 1024 * 1024;
+    if (file.size < 100 * 1024 * 1024) {
+      chunkSize = 16 * 1024 * 1024;
+    } else if (file.size > 1024 * 1024 * 1024) {
+      chunkSize = 64 * 1024 * 1024;
+    }
+
+    const session = await api.initUploadSession(
+      file.name,
+      file.size,
+      chunkSize,
+      false,
+      passphrase
+    );
+
+    let offset = 0;
+    let chunkIndex = 0;
+
+    while (offset < file.size) {
+      const end = Math.min(offset + chunkSize, file.size);
+      const slice = file.slice(offset, end);
+      const buffer = await slice.arrayBuffer();
+
+      let binary = '';
+      const bytes = new Uint8Array(buffer);
+      const len = bytes.byteLength;
+      for (let i = 0; i < len; i += 8192) {
+        binary += String.fromCharCode.apply(
+          null,
+          bytes.subarray(i, Math.min(i + 8192, len)) as any
+        );
+      }
+      const b64Part = btoa(binary);
+
+      await api.uploadChunkPart(session.session_id, chunkIndex, b64Part);
+
+      offset = end;
+      chunkIndex++;
+
+      if (onProgress) {
+        const pct = Math.min(100, Math.round((offset / file.size) * 100));
+        onProgress(pct, chunkIndex, session.total_chunks);
+      }
+    }
+
+    return await api.finishUploadSession(session.session_id);
+  },
+
   uploadFilePackage: (
     fileName: string,
     fileBytesBase64: string,

@@ -31,7 +31,7 @@ export const MagnetModal: React.FC<MagnetModalProps> = ({
         setParsedInfo(info);
       } catch (err: any) {
         setParsedInfo(null);
-        setErrorMsg('Format tautan magnet tidak valid.');
+        setErrorMsg('Invalid magnet link format.');
       }
     } else {
       setParsedInfo(null);
@@ -58,7 +58,7 @@ export const MagnetModal: React.FC<MagnetModalProps> = ({
         <div className="flex items-center justify-between p-5 border-b border-slate-800">
           <div className="flex items-center space-x-2">
             <LinkIcon className="w-5 h-5 text-cyan-400" />
-            <h3 className="text-sm font-bold text-slate-100">Buka Tautan Magnet MagDrive</h3>
+            <h3 className="text-sm font-bold text-slate-100">Open MagDrive Magnet Link</h3>
           </div>
           <button
             onClick={onClose}
@@ -71,7 +71,7 @@ export const MagnetModal: React.FC<MagnetModalProps> = ({
         <div className="p-6 space-y-4 text-xs">
           <div>
             <label className="font-semibold text-slate-300 block mb-1.5">
-              Tempelkan Tautan Magnet (URI):
+              Paste Magnet URI:
             </label>
             <textarea
               rows={3}
@@ -93,15 +93,15 @@ export const MagnetModal: React.FC<MagnetModalProps> = ({
             <div className="bg-slate-900 border border-slate-800 rounded-xl p-4 space-y-2">
               <div className="flex items-center space-x-2 text-cyan-400 font-semibold mb-1">
                 <FileText className="w-4 h-4" />
-                <span>Pratinjau Berkas Magnet:</span>
+                <span>Magnet File Preview:</span>
               </div>
               <div className="grid grid-cols-2 gap-2 text-slate-300">
                 <div>
-                  <span className="text-slate-500 block text-[10px]">Nama Berkas:</span>
-                  <span className="font-semibold">{parsedInfo.name || '(Tanpa Nama)'}</span>
+                  <span className="text-slate-500 block text-[10px]">File Name:</span>
+                  <span className="font-semibold">{parsedInfo.name || '(Unnamed)'}</span>
                 </div>
                 <div>
-                  <span className="text-slate-500 block text-[10px]">Ukuran Asli:</span>
+                  <span className="text-slate-500 block text-[10px]">Original Size:</span>
                   <span className="font-mono">{formatSize(parsedInfo.total_bytes)}</span>
                 </div>
                 <div className="col-span-2">
@@ -118,7 +118,7 @@ export const MagnetModal: React.FC<MagnetModalProps> = ({
             onClick={onClose}
             className="px-4 py-2 rounded-lg text-xs font-semibold text-slate-400 hover:text-slate-200 hover:bg-slate-800 transition-colors"
           >
-            Batal
+            Cancel
           </button>
           <button
             onClick={handleStartDownload}
@@ -126,7 +126,7 @@ export const MagnetModal: React.FC<MagnetModalProps> = ({
             className="flex items-center space-x-1.5 px-5 py-2 rounded-lg text-xs font-bold bg-cyan-600 hover:bg-cyan-500 text-white transition-all shadow-md shadow-cyan-600/30 disabled:opacity-50"
           >
             <Download className="w-3.5 h-3.5" />
-            <span>Unduh Berkas</span>
+            <span>Download File</span>
           </button>
         </div>
       </div>

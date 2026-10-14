@@ -47,6 +47,7 @@ struct DriveFileListResponse {
     files: Vec<DriveFileItem>,
 }
 
+#[derive(Clone)]
 pub struct DriveClient {
     pub client: reqwest::Client,
     pub access_token: String,

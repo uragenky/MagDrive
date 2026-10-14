@@ -34,7 +34,7 @@ export function App() {
 
     // Listen for OAuth success event
     const unlistenOAuth = listen('oauth-success', () => {
-      alert('Autentikasi Google Workspace berhasil terhubung!');
+      alert('Google Workspace account authenticated and connected successfully!');
     });
 
     // Listen for transfer progress updates
@@ -104,7 +104,7 @@ export function App() {
       await api.syncCatalog();
       await refreshFiles();
     } catch (err: any) {
-      alert('Gagal menyinkronkan katalog: ' + (err?.toString() || ''));
+      alert('Failed to sync catalog: ' + (err?.toString() || ''));
     } finally {
       setIsSyncing(false);
     }
@@ -146,34 +146,60 @@ export function App() {
 
       await refreshTransfers();
     } catch (err: any) {
-      alert('Gagal mengunduh berkas: ' + (err?.toString() || ''));
+      alert('Failed to download file: ' + (err?.toString() || ''));
     } finally {
       setIsDownloading(null);
     }
   };
 
   const handleDelete = async (packageId: string) => {
-    if (!confirm('Apakah Anda yakin ingin menghapus berkas ini dari bank data dan seluruh cloud targets?')) {
+    if (!confirm('Are you sure you want to delete this file from the vault and all cloud storage targets?')) {
       return;
     }
     try {
       await api.deletePackage(packageId);
       await refreshFiles();
     } catch (err: any) {
-      alert('Gagal menghapus berkas: ' + (err?.toString() || ''));
+      alert('Failed to delete file: ' + (err?.toString() || ''));
     }
   };
 
-  const handleUpload = async (
-    fileName: string,
-    base64Data: string,
-    isFolder: boolean,
-    passphrase?: string
+  const handleUploadFile = async (
+    file: File,
+    passphrase?: string,
+    onProgress?: (percent: number, currentChunk: number, totalChunks: number) => void
   ): Promise<string> => {
-    const pkgId = await api.uploadFilePackage(fileName, base64Data, isFolder, [], passphrase);
+    const pkgId = await api.uploadFileStream(file, passphrase, onProgress);
     await refreshFiles();
     await refreshTransfers();
     return pkgId;
+  };
+
+  const handlePauseTransfer = async (transferId: string) => {
+    await api.pauseTransfer(transferId);
+    await refreshTransfers();
+  };
+
+  const handleResumeTransfer = async (transferId: string) => {
+    await api.resumeTransfer(transferId);
+    await refreshTransfers();
+  };
+
+  const handleCancelTransfer = async (transferId: string) => {
+    if (confirm('Cancel this transfer? Incomplete chunks will be deleted from Google Drive.')) {
+      await api.cancelTransfer(transferId);
+      await refreshTransfers();
+    }
+  };
+
+  const handleDeleteTransfer = async (transferId: string) => {
+    await api.deleteTransfer(transferId);
+    await refreshTransfers();
+  };
+
+  const handleClearFinished = async () => {
+    await api.clearFinishedTransfers();
+    await refreshTransfers();
   };
 
   const handleCreateVault = async (name: string, passphrase: string, targets: VaultTarget[]) => {
@@ -250,12 +276,21 @@ export function App() {
           {activeTab === 'upload' && (
             <UploadView
               activeVault={activeVault}
-              onUpload={handleUpload}
+              onUploadFile={handleUploadFile}
               onGoToExplorer={() => setActiveTab('explorer')}
             />
           )}
 
-          {activeTab === 'transfers' && <TransfersView transfers={transfers} />}
+          {activeTab === 'transfers' && (
+            <TransfersView
+              transfers={transfers}
+              onPause={handlePauseTransfer}
+              onResume={handleResumeTransfer}
+              onCancel={handleCancelTransfer}
+              onDelete={handleDeleteTransfer}
+              onClearFinished={handleClearFinished}
+            />
+          )}
 
           {activeTab === 'members' && (
             <MembersView

@@ -51,13 +51,13 @@ export const VaultModal: React.FC<VaultModalProps> = ({
   const handleCreateSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newName.trim() || !newPassphrase.trim()) {
-      setErrorMsg('Nama vault dan passphrase wajib diisi.');
+      setErrorMsg('Vault name and passphrase are required.');
       return;
     }
 
     const validTargets = newTargets.filter((t) => t.target_id.trim() !== '');
     if (validTargets.length === 0) {
-      setErrorMsg('Minimal satu ID Shared Drive atau Folder harus diisi.');
+      setErrorMsg('At least one Shared Drive or Folder ID must be provided.');
       return;
     }
 
@@ -67,7 +67,7 @@ export const VaultModal: React.FC<VaultModalProps> = ({
       await onCreateVault(newName.trim(), newPassphrase.trim(), validTargets);
       onClose();
     } catch (err: any) {
-      setErrorMsg(err?.toString() || 'Gagal membuat vault.');
+      setErrorMsg(err?.toString() || 'Failed to create vault.');
     } finally {
       setIsLoading(false);
     }
@@ -76,7 +76,7 @@ export const VaultModal: React.FC<VaultModalProps> = ({
   const handleImportSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!importToken.trim() || !importPassphrase.trim()) {
-      setErrorMsg('Token dan passphrase wajib diisi.');
+      setErrorMsg('Token and passphrase are required.');
       return;
     }
 
@@ -86,7 +86,7 @@ export const VaultModal: React.FC<VaultModalProps> = ({
       await onImportVault(importToken.trim(), importPassphrase.trim());
       onClose();
     } catch (err: any) {
-      setErrorMsg(err?.toString() || 'Gagal mengimpor vault.');
+      setErrorMsg(err?.toString() || 'Failed to import vault.');
     } finally {
       setIsLoading(false);
     }
@@ -99,7 +99,7 @@ export const VaultModal: React.FC<VaultModalProps> = ({
         <div className="flex items-center justify-between p-5 border-b border-slate-800">
           <div className="flex items-center space-x-2">
             <Layers className="w-5 h-5 text-cyan-400" />
-            <h3 className="text-sm font-bold text-slate-100">Kelola Bank Data & Vault Grup</h3>
+            <h3 className="text-sm font-bold text-slate-100">Manage Group Vaults</h3>
           </div>
           <button
             onClick={onClose}
@@ -122,7 +122,7 @@ export const VaultModal: React.FC<VaultModalProps> = ({
                 : 'text-slate-400 hover:text-slate-200'
             }`}
           >
-            Daftar Vault ({vaults.length})
+            Vault List ({vaults.length})
           </button>
           <button
             onClick={() => {
@@ -135,7 +135,7 @@ export const VaultModal: React.FC<VaultModalProps> = ({
                 : 'text-slate-400 hover:text-slate-200'
             }`}
           >
-            Buat Vault Baru
+            Create New Vault
           </button>
           <button
             onClick={() => {
@@ -148,7 +148,7 @@ export const VaultModal: React.FC<VaultModalProps> = ({
                 : 'text-slate-400 hover:text-slate-200'
             }`}
           >
-            Impor Token Vault
+            Import Vault Token
           </button>
         </div>
 
@@ -165,7 +165,7 @@ export const VaultModal: React.FC<VaultModalProps> = ({
             <div className="space-y-3">
               {vaults.length === 0 ? (
                 <div className="text-center py-8 text-slate-500">
-                  Belum ada vault tersimpan. Buat vault baru atau impor token untuk memulai.
+                  No vaults saved. Create a new vault or import a token to get started.
                 </div>
               ) : (
                 vaults.map((v) => {
@@ -188,24 +188,24 @@ export const VaultModal: React.FC<VaultModalProps> = ({
                           </span>
                           {isActive && (
                             <span className="text-[10px] px-2 py-0.5 rounded-full font-semibold bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">
-                              Aktif
+                              Active
                             </span>
                           )}
                         </div>
                         <div className="text-[11px] text-slate-500 mt-1 font-mono">
-                          {v.targets.length} Target Drive/Folder • ID: {v.id}
+                          {v.targets.length} Target Drives/Folders • ID: {v.id}
                         </div>
                       </div>
 
                       <button
                         onClick={(e) => {
                           e.stopPropagation();
-                          if (confirm(`Hapus vault ${v.name} dari perangkat ini?`)) {
+                          if (confirm(`Remove vault "${v.name}" from this device?`)) {
                             onDeleteVault(v.id);
                           }
                         }}
                         className="p-1.5 rounded-lg text-slate-500 hover:text-rose-400 hover:bg-slate-800 transition-colors"
-                        title="Hapus Vault"
+                        title="Delete Vault"
                       >
                         <Trash2 className="w-4 h-4" />
                       </button>
@@ -219,10 +219,10 @@ export const VaultModal: React.FC<VaultModalProps> = ({
           {activeTab === 'create' && (
             <form onSubmit={handleCreateSubmit} className="space-y-4">
               <div>
-                <label className="font-semibold text-slate-400 block mb-1">Nama Vault / Grup</label>
+                <label className="font-semibold text-slate-400 block mb-1">Vault Name</label>
                 <input
                   type="text"
-                  placeholder="Contoh: Tim Alpha Project"
+                  placeholder="e.g., Alpha Project Data"
                   value={newName}
                   onChange={(e) => setNewName(e.target.value)}
                   className="w-full bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 text-slate-200 focus:outline-none focus:border-cyan-500"
@@ -231,11 +231,11 @@ export const VaultModal: React.FC<VaultModalProps> = ({
 
               <div>
                 <label className="font-semibold text-slate-400 block mb-1">
-                  Master Passphrase (Kunci Enkripsi Argon2id)
+                  Master Passphrase (Argon2id Key Derivation)
                 </label>
                 <input
                   type="password"
-                  placeholder="Kata sandi rahasia untuk enkripsi grup"
+                  placeholder="Secret passphrase for vault encryption"
                   value={newPassphrase}
                   onChange={(e) => setNewPassphrase(e.target.value)}
                   className="w-full bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 text-slate-200 font-mono focus:outline-none focus:border-cyan-500"
@@ -244,7 +244,7 @@ export const VaultModal: React.FC<VaultModalProps> = ({
 
               <div>
                 <label className="font-semibold text-slate-400 block mb-1">
-                  Target Google Workspace Shared Drive / Folder ID:
+                  Target Google Drive / Folder IDs:
                 </label>
                 <div className="space-y-2">
                   {newTargets.map((t, idx) => (
@@ -262,7 +262,7 @@ export const VaultModal: React.FC<VaultModalProps> = ({
                       />
                       <input
                         type="text"
-                        placeholder="Shared Drive / Folder ID (Contoh: 0AJk...)"
+                        placeholder="Shared Drive / Folder ID (e.g., 0AJk...)"
                         value={t.target_id}
                         onChange={(e) => {
                           const copy = [...newTargets];
@@ -281,7 +281,7 @@ export const VaultModal: React.FC<VaultModalProps> = ({
                 disabled={isLoading}
                 className="w-full py-2.5 rounded-lg font-bold bg-cyan-600 hover:bg-cyan-500 text-white transition-all shadow-md shadow-cyan-600/30 disabled:opacity-50 mt-4"
               >
-                {isLoading ? 'Membuat Vault...' : 'Buat Vault Baru Sekarang'}
+                {isLoading ? 'Creating Vault...' : 'Create Vault Now'}
               </button>
             </form>
           )}
@@ -290,11 +290,11 @@ export const VaultModal: React.FC<VaultModalProps> = ({
             <form onSubmit={handleImportSubmit} className="space-y-4">
               <div>
                 <label className="font-semibold text-slate-400 block mb-1">
-                  Tempelkan Token Ekspor Vault (.magvault):
+                  Paste Vault Export Token (.magvault):
                 </label>
                 <textarea
                   rows={4}
-                  placeholder="Tempel string base64 token vault di sini..."
+                  placeholder="Paste base64 vault token string here..."
                   value={importToken}
                   onChange={(e) => setImportToken(e.target.value)}
                   className="w-full bg-slate-900 border border-slate-800 rounded-lg p-3 text-slate-200 font-mono text-[11px] focus:outline-none focus:border-cyan-500 resize-none"
@@ -303,11 +303,11 @@ export const VaultModal: React.FC<VaultModalProps> = ({
 
               <div>
                 <label className="font-semibold text-slate-400 block mb-1">
-                  Passphrase Vault:
+                  Vault Passphrase:
                 </label>
                 <input
                   type="password"
-                  placeholder="Kata sandi pembuka kunci vault"
+                  placeholder="Passphrase to decrypt vault"
                   value={importPassphrase}
                   onChange={(e) => setImportPassphrase(e.target.value)}
                   className="w-full bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 text-slate-200 font-mono focus:outline-none focus:border-cyan-500"
@@ -319,7 +319,7 @@ export const VaultModal: React.FC<VaultModalProps> = ({
                 disabled={isLoading}
                 className="w-full py-2.5 rounded-lg font-bold bg-emerald-600 hover:bg-emerald-500 text-white transition-all shadow-md shadow-emerald-600/30 disabled:opacity-50 mt-4"
               >
-                {isLoading ? 'Mengimpor...' : 'Impor & Buka Kunci Vault'}
+                {isLoading ? 'Importing...' : 'Import & Unlock Vault'}
               </button>
             </form>
           )}

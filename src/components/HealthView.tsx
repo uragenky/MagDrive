@@ -23,9 +23,9 @@ export const HealthView: React.FC<HealthViewProps> = ({ activeVault, files, onRe
       setIsAuditing(true);
       setAuditMessage(null);
       await onRebuild();
-      setAuditMessage('Audit selesai: Seluruh potongan biner dan paritas telah diverifikasi utuh.');
+      setAuditMessage('Audit complete: All binary shards and parity blocks verified intact.');
     } catch (err: any) {
-      setAuditMessage(err?.toString() || 'Audit selesai.');
+      setAuditMessage(err?.toString() || 'Audit complete.');
     } finally {
       setIsAuditing(false);
     }
@@ -34,7 +34,7 @@ export const HealthView: React.FC<HealthViewProps> = ({ activeVault, files, onRe
   if (!activeVault) {
     return (
       <div className="flex-1 flex items-center justify-center bg-slate-900 p-8 text-center text-slate-400">
-        Pilih vault grup untuk melihat status kesehatan redundansi.
+        Select a group vault to view redundancy health status.
       </div>
     );
   }
@@ -46,31 +46,31 @@ export const HealthView: React.FC<HealthViewProps> = ({ activeVault, files, onRe
     <div className="flex-1 bg-slate-900 overflow-y-auto p-8">
       <div className="max-w-4xl mx-auto space-y-8">
         <div>
-          <h2 className="text-xl font-bold text-slate-100">Status Kesehatan & Redundansi Vault</h2>
+          <h2 className="text-xl font-bold text-slate-100">Vault Health & Redundancy Status</h2>
           <p className="text-xs text-slate-400 mt-1">
-            Pemantauan integritas blok Reed-Solomon dan diagnostik otomatis multi-drive.
+            Monitor Reed-Solomon block integrity and multi-drive automated diagnostics.
           </p>
         </div>
 
         {/* Health Metric Cards */}
         <div className="grid grid-cols-3 gap-4">
           <div className="bg-slate-950 border border-slate-800 rounded-2xl p-5">
-            <span className="text-xs text-slate-400 font-medium block mb-2">Total Berkas Aktif</span>
+            <span className="text-xs text-slate-400 font-medium block mb-2">Total Active Files</span>
             <div className="text-2xl font-bold text-slate-100 font-mono">{files.length}</div>
-            <span className="text-[10px] text-slate-500 mt-1 block">Tercatat di SQLite lokal</span>
+            <span className="text-[10px] text-slate-500 mt-1 block">Indexed in local SQLite</span>
           </div>
 
           <div className="bg-slate-950 border border-slate-800 rounded-2xl p-5">
-            <span className="text-xs text-slate-400 font-medium block mb-2">Status Redundansi</span>
+            <span className="text-xs text-slate-400 font-medium block mb-2">Redundancy Status</span>
             <div className="text-2xl font-bold text-emerald-400 font-mono">100%</div>
             <span className="text-[10px] text-emerald-500/80 mt-1 block flex items-center space-x-1">
               <ShieldCheck className="w-3 h-3" />
-              <span>{healthyCount} Berkas Sehat (Healthy)</span>
+              <span>{healthyCount} Files Healthy</span>
             </span>
           </div>
 
           <div className="bg-slate-950 border border-slate-800 rounded-2xl p-5">
-            <span className="text-xs text-slate-400 font-medium block mb-2">Target Storage Terhubung</span>
+            <span className="text-xs text-slate-400 font-medium block mb-2">Connected Targets</span>
             <div className="text-2xl font-bold text-cyan-400 font-mono">{targetCount}</div>
             <span className="text-[10px] text-slate-500 mt-1 block">
               {targetCount >= 3 ? 'Reed-Solomon RS 2+1' : targetCount === 2 ? 'RS 1+1 Mirror' : 'Single Target'}
@@ -82,7 +82,7 @@ export const HealthView: React.FC<HealthViewProps> = ({ activeVault, files, onRe
         <div className="bg-slate-950 border border-slate-800 rounded-2xl p-6 space-y-4">
           <div className="flex items-center space-x-2 border-b border-slate-800/80 pb-3">
             <HardDrive className="w-5 h-5 text-cyan-400" />
-            <h3 className="text-sm font-bold text-slate-100">Daftar Target Storage Terpasang</h3>
+            <h3 className="text-sm font-bold text-slate-100">Configured Storage Targets</h3>
           </div>
 
           <div className="space-y-3">
@@ -96,14 +96,14 @@ export const HealthView: React.FC<HealthViewProps> = ({ activeVault, files, onRe
                   <div>
                     <div className="font-semibold text-slate-200">{t.label}</div>
                     <div className="text-[11px] text-slate-400 font-mono">
-                      {t.target_type} • ID: {t.target_id}
+                      {t.target_type === 'SharedDrive' ? 'Google Workspace Shared Drive' : 'Personal Shared Folder'} • ID: {t.target_id}
                     </div>
                   </div>
                 </div>
 
                 <div className="flex items-center space-x-3 text-right">
                   <span className="text-[10px] px-2.5 py-1 rounded-full font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
-                    Online (Siap I/O)
+                    Online (Ready)
                   </span>
                 </div>
               </div>
@@ -115,14 +115,11 @@ export const HealthView: React.FC<HealthViewProps> = ({ activeVault, files, onRe
         <div className="bg-slate-950 border border-slate-800 rounded-2xl p-6 space-y-4">
           <div className="flex items-center space-x-2 border-b border-slate-800/80 pb-3">
             <Activity className="w-5 h-5 text-sky-400" />
-            <h3 className="text-sm font-bold text-slate-100">Diagnostik & Self-Healing Rebuild</h3>
+            <h3 className="text-sm font-bold text-slate-100">Diagnostics & Self-Healing Rebuild</h3>
           </div>
 
           <p className="text-xs text-slate-400">
-            Jika salah satu Shared Drive Anda pernah mengalami kerusakan atau baru saja diganti
-            dengan drive baru, sistem akan memindai seluruh potongan biner yang hilang,
-            merekonstruksinya secara matematis dari paritas yang tersisa, dan mengunggahnya kembali ke
-            target pengganti.
+            If any of your Shared Drives failed or was recently replaced, the system will scan for missing shards, mathematically reconstruct them from surviving parity blocks, and re-upload them to the replacement target.
           </p>
 
           {auditMessage && (
@@ -138,7 +135,7 @@ export const HealthView: React.FC<HealthViewProps> = ({ activeVault, files, onRe
             className="flex items-center space-x-2 px-5 py-2.5 rounded-xl text-xs font-bold bg-cyan-600 hover:bg-cyan-500 text-white transition-all shadow-md shadow-cyan-600/30 disabled:opacity-50"
           >
             <RefreshCw className={`w-4 h-4 ${isAuditing ? 'animate-spin' : ''}`} />
-            <span>{isAuditing ? 'Sedang Melakukan Audit & Perbaikan...' : 'Audit & Rebuild Vault Sekarang'}</span>
+            <span>{isAuditing ? 'Auditing & Healing Shards...' : 'Run Audit & Self-Healing Now'}</span>
           </button>
         </div>
       </div>

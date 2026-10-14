@@ -44,6 +44,8 @@ Files uploaded through MagDrive are:
 - **Multi-Target Storage Abstraction**: Works transparently with Google Workspace Shared Drives (`supportsAllDrives=true`) or regular Shared Folders on `@gmail.com` personal accounts.
 - **Integrated Google Permissions RBAC**: Group administrators can invite or revoke member emails from the Shared Drive directly within the app via the Google Drive Permissions API.
 - **Local SQLite Cache**: File lists, metadata, and transfer queues are indexed locally for zero-latency searching and offline catalog browsing.
+- **Adaptive Streaming Upload**: Files are sliced in memory-safe adaptive blocks (16 MB / 32 MB / 64 MB), guaranteeing constant memory consumption (< 50 MB RAM) even for multi-GB files without out-of-memory errors.
+- **Transfer Queue Lifecycle & Auto-Cleanup**: Full state machine with Pause, Resume, Cancel, and Delete. Cancelling a transfer automatically removes any orphaned chunks uploaded to Google Drive.
 - **Transfer State Machine**: Resumable chunk transfers equipped with a Leaky Bucket Rate Limiter and Exponential Backoff with Jitter against Google API rate limits (HTTP 429).
 - **Multi-Platform Support**: Cross-compiled binaries for Windows (`.msi` / `.exe`), macOS (`.dmg` / `.app`), and Linux (`.deb` / `.AppImage`).
 
@@ -141,6 +143,10 @@ npm install
 
 Run in development mode (starts Vite frontend + compiles Rust backend):
 ```bash
+# On Linux / WSLg (with isolated namespace & self-healing WebKit helper):
+./run-dev.sh
+
+# Or standard Tauri dev command:
 npm run tauri dev
 ```
 

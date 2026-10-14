@@ -21,6 +21,7 @@ pub fn run() {
     let app_state = commands::AppState {
         db,
         keypair: std::sync::Mutex::new(keypair),
+        upload_sessions: std::sync::Mutex::new(std::collections::HashMap::new()),
     };
 
     tauri::Builder::default()
@@ -53,6 +54,14 @@ pub fn run() {
             commands::list_transfers,
             commands::upload_file_package,
             commands::download_package,
+            commands::init_upload_session,
+            commands::upload_chunk_part,
+            commands::finish_upload_session,
+            commands::pause_transfer,
+            commands::resume_transfer,
+            commands::cancel_transfer,
+            commands::delete_transfer,
+            commands::clear_finished_transfers,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

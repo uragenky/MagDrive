@@ -6,14 +6,30 @@ import {
   CheckCircle2,
   Clock,
   AlertTriangle,
+  Pause,
+  Play,
+  XCircle,
+  Trash2,
 } from 'lucide-react';
 import { TransferRecord } from '../types';
 
 interface TransfersViewProps {
   transfers: TransferRecord[];
+  onPause?: (transferId: string) => Promise<void>;
+  onResume?: (transferId: string) => Promise<void>;
+  onCancel?: (transferId: string) => Promise<void>;
+  onDelete?: (transferId: string) => Promise<void>;
+  onClearFinished?: () => Promise<void>;
 }
 
-export const TransfersView: React.FC<TransfersViewProps> = ({ transfers }) => {
+export const TransfersView: React.FC<TransfersViewProps> = ({
+  transfers,
+  onPause,
+  onResume,
+  onCancel,
+  onDelete,
+  onClearFinished,
+}) => {
   const formatSize = (bytes: number) => {
     if (bytes === 0) return '0 B';
     const k = 1024;
@@ -28,41 +44,70 @@ export const TransfersView: React.FC<TransfersViewProps> = ({ transfers }) => {
         return (
           <span className="inline-flex items-center space-x-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
             <CheckCircle2 className="w-3 h-3" />
-            <span>Selesai</span>
+            <span>Completed</span>
           </span>
         );
       case 'transferring':
         return (
           <span className="inline-flex items-center space-x-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-cyan-500/10 text-cyan-400 border border-cyan-500/20 animate-pulse">
             <ArrowUpDown className="w-3 h-3" />
-            <span>Transfer Aktif</span>
+            <span>Transferring</span>
+          </span>
+        );
+      case 'paused':
+        return (
+          <span className="inline-flex items-center space-x-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-amber-500/10 text-amber-400 border border-amber-500/20">
+            <Pause className="w-3 h-3" />
+            <span>Paused</span>
+          </span>
+        );
+      case 'cancelled':
+        return (
+          <span className="inline-flex items-center space-x-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-slate-800 text-slate-400 border border-slate-700">
+            <XCircle className="w-3 h-3" />
+            <span>Cancelled</span>
           </span>
         );
       case 'failed':
         return (
           <span className="inline-flex items-center space-x-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-rose-500/10 text-rose-400 border border-rose-500/20">
             <AlertTriangle className="w-3 h-3" />
-            <span>Gagal</span>
+            <span>Failed</span>
           </span>
         );
       default:
         return (
           <span className="inline-flex items-center space-x-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-slate-800 text-slate-400 border border-slate-700">
             <Clock className="w-3 h-3" />
-            <span>Menunggu</span>
+            <span>Pending</span>
           </span>
         );
     }
   };
 
+  const hasFinished = transfers.some((t) =>
+    ['completed', 'cancelled', 'failed'].includes(t.status.toLowerCase())
+  );
+
   return (
     <div className="flex-1 bg-slate-900 overflow-y-auto p-8">
       <div className="max-w-4xl mx-auto space-y-6">
-        <div>
-          <h2 className="text-xl font-bold text-slate-100">Daftar Antrean & Riwayat Transfer</h2>
-          <p className="text-xs text-slate-400 mt-1">
-            Status transfer chunk, enkripsi, dan rekonstruksi paritas berkas.
-          </p>
+        <div className="flex items-center justify-between">
+          <div>
+            <h2 className="text-xl font-bold text-slate-100">Transfer Queue & History</h2>
+            <p className="text-xs text-slate-400 mt-1">
+              Real-time chunk transfers, pause/resume state machine, and parity reconstruction.
+            </p>
+          </div>
+
+          {hasFinished && onClearFinished && (
+            <button
+              onClick={onClearFinished}
+              className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 transition-all shadow-sm"
+            >
+              Clear Finished
+            </button>
+          )}
         </div>
 
         {transfers.length === 0 ? (
@@ -71,11 +116,10 @@ export const TransfersView: React.FC<TransfersViewProps> = ({ transfers }) => {
               <ArrowUpDown className="w-6 h-6" />
             </div>
             <h4 className="text-sm font-semibold text-slate-300 mb-1">
-              Belum Ada Aktivitas Transfer
+              No Transfer Activity
             </h4>
             <p className="text-xs text-slate-500 max-w-sm mx-auto">
-              Ketika Anda mengunggah atau mengunduh berkas, progres transfer per chunk akan tercatat di
-              sini secara otomatis.
+              When you upload or download files, per-chunk transfer progress and verification will be journaled here automatically.
             </p>
           </div>
         ) : (
@@ -86,6 +130,11 @@ export const TransfersView: React.FC<TransfersViewProps> = ({ transfers }) => {
                 tx.total_bytes > 0
                   ? Math.min(100, Math.round((tx.transferred_bytes / tx.total_bytes) * 100))
                   : 0;
+
+              const status = tx.status.toLowerCase();
+              const isTransferring = status === 'transferring';
+              const isPaused = status === 'paused';
+              const isFinished = ['completed', 'failed', 'cancelled'].includes(status);
 
               return (
                 <div
@@ -110,7 +159,7 @@ export const TransfersView: React.FC<TransfersViewProps> = ({ transfers }) => {
                       <div>
                         <div className="text-xs font-semibold text-slate-200">{tx.name}</div>
                         <div className="text-[10px] text-slate-500 font-mono">
-                          {isUpload ? 'Unggah' : 'Unduh'} • {tx.package_id}
+                          {isUpload ? 'Upload' : 'Download'} • {tx.package_id}
                         </div>
                       </div>
                     </div>
@@ -123,6 +172,49 @@ export const TransfersView: React.FC<TransfersViewProps> = ({ transfers }) => {
                         <span className="text-slate-500"> / {formatSize(tx.total_bytes)}</span>
                       </div>
                       {getStatusBadge(tx.status)}
+
+                      {/* Action Controls */}
+                      <div className="flex items-center space-x-1 pl-2 border-l border-slate-800">
+                        {isTransferring && onPause && (
+                          <button
+                            onClick={() => onPause(tx.id)}
+                            title="Pause Transfer"
+                            className="p-1.5 rounded hover:bg-slate-800 text-slate-400 hover:text-amber-400 transition-colors"
+                          >
+                            <Pause className="w-3.5 h-3.5" />
+                          </button>
+                        )}
+
+                        {isPaused && onResume && (
+                          <button
+                            onClick={() => onResume(tx.id)}
+                            title="Resume Transfer"
+                            className="p-1.5 rounded hover:bg-slate-800 text-slate-400 hover:text-emerald-400 transition-colors"
+                          >
+                            <Play className="w-3.5 h-3.5" />
+                          </button>
+                        )}
+
+                        {(isTransferring || isPaused) && onCancel && (
+                          <button
+                            onClick={() => onCancel(tx.id)}
+                            title="Cancel Transfer & Clean Up"
+                            className="p-1.5 rounded hover:bg-slate-800 text-slate-400 hover:text-rose-400 transition-colors"
+                          >
+                            <XCircle className="w-3.5 h-3.5" />
+                          </button>
+                        )}
+
+                        {isFinished && onDelete && (
+                          <button
+                            onClick={() => onDelete(tx.id)}
+                            title="Remove from History"
+                            className="p-1.5 rounded hover:bg-slate-800 text-slate-400 hover:text-rose-400 transition-colors"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        )}
+                      </div>
                     </div>
                   </div>
 
@@ -132,7 +224,9 @@ export const TransfersView: React.FC<TransfersViewProps> = ({ transfers }) => {
                       className={`h-full rounded-full transition-all duration-300 ${
                         tx.status === 'completed'
                           ? 'bg-emerald-500'
-                          : tx.status === 'failed'
+                          : tx.status === 'paused'
+                          ? 'bg-amber-500'
+                          : tx.status === 'failed' || tx.status === 'cancelled'
                           ? 'bg-rose-500'
                           : 'bg-cyan-500'
                       }`}
@@ -142,7 +236,7 @@ export const TransfersView: React.FC<TransfersViewProps> = ({ transfers }) => {
 
                   {tx.error_message && (
                     <div className="text-[11px] text-rose-400 font-mono bg-rose-500/10 border border-rose-500/20 rounded p-2">
-                      Galat: {tx.error_message}
+                      Error: {tx.error_message}
                     </div>
                   )}
                 </div>

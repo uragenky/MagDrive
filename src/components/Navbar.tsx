@@ -29,13 +29,13 @@ export const Navbar: React.FC<NavbarProps> = ({
               </span>
             </div>
             <p className="text-xs text-slate-400">
-              {activeVault.targets.length} Target Drive Terhubung • Enkripsi AES-256 Aktif
+              {activeVault.targets.length} Target Drives Connected • AES-256 Encryption Active
             </p>
           </div>
         ) : (
           <div className="flex items-center space-x-2 text-slate-400 text-sm">
             <ShieldCheck className="w-4 h-4 text-slate-500" />
-            <span>Pilih atau Buat Vault Grup untuk Memulai</span>
+            <span>Select or Create a Group Vault to Get Started</span>
           </div>
         )}
       </div>
@@ -46,7 +46,7 @@ export const Navbar: React.FC<NavbarProps> = ({
           className="flex items-center space-x-2 px-3 py-1.5 rounded-lg text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-cyan-400 border border-slate-700 hover:border-cyan-500/50 transition-all shadow-sm"
         >
           <LinkIcon className="w-3.5 h-3.5" />
-          <span>Buka Magnet</span>
+          <span>Open Magnet</span>
         </button>
 
         {activeVault && (
@@ -56,7 +56,7 @@ export const Navbar: React.FC<NavbarProps> = ({
             className="flex items-center space-x-2 px-3 py-1.5 rounded-lg text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 hover:border-slate-600 transition-all shadow-sm disabled:opacity-50"
           >
             <RefreshCw className={`w-3.5 h-3.5 text-cyan-400 ${isSyncing ? 'animate-spin' : ''}`} />
-            <span>{isSyncing ? 'Menyinkronkan...' : 'Sinkronisasi'}</span>
+            <span>{isSyncing ? 'Syncing...' : 'Sync Catalog'}</span>
           </button>
         )}
 
@@ -65,7 +65,7 @@ export const Navbar: React.FC<NavbarProps> = ({
           className="flex items-center space-x-2 px-3 py-1.5 rounded-lg text-xs font-semibold bg-cyan-600 hover:bg-cyan-500 text-white transition-all shadow-sm shadow-cyan-600/30"
         >
           <PlusCircle className="w-3.5 h-3.5" />
-          <span>Kelola Vault</span>
+          <span>Manage Vaults</span>
         </button>
       </div>
     </header>

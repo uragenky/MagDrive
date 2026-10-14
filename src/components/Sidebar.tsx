@@ -29,12 +29,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onSelectVault,
 }) => {
   const navItems = [
-    { id: 'explorer', label: 'Bank Data', icon: HardDrive },
-    { id: 'upload', label: 'Unggah Berkas', icon: UploadCloud },
-    { id: 'transfers', label: 'Daftar Transfer', icon: ArrowUpDown },
-    { id: 'members', label: 'Akses & Anggota', icon: Users },
-    { id: 'health', label: 'Status & Redundansi', icon: Activity },
-    { id: 'settings', label: 'Pengaturan & GCP', icon: Settings },
+    { id: 'explorer', label: 'File Explorer', icon: HardDrive },
+    { id: 'upload', label: 'Upload Files', icon: UploadCloud },
+    { id: 'transfers', label: 'Transfer Queue', icon: ArrowUpDown },
+    { id: 'members', label: 'Access & Members', icon: Users },
+    { id: 'health', label: 'Vault Health', icon: Activity },
+    { id: 'settings', label: 'Settings & GCP', icon: Settings },
   ] as const;
 
   return (
@@ -58,7 +58,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
         {/* Vault Selector */}
         <div className="p-4 border-b border-slate-800/80">
           <label className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider block mb-1.5">
-            Grup Vault Aktif
+            Active Vault
           </label>
           <div className="relative">
             <select
@@ -67,7 +67,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
               className="w-full appearance-none bg-slate-900 border border-slate-700/80 rounded-lg px-3 py-2 text-xs font-medium text-slate-200 focus:outline-none focus:border-cyan-500 cursor-pointer pr-8"
             >
               {vaults.length === 0 ? (
-                <option value="">(Belum Ada Vault)</option>
+                <option value="">(No Vault Selected)</option>
               ) : (
                 vaults.map((v) => (
                   <option key={v.id} value={v.id}>
@@ -107,7 +107,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
       <div className="p-4 border-t border-slate-800 text-[11px] text-slate-500 font-mono">
         <div className="flex items-center justify-between">
           <span>Engine: Reed-Solomon</span>
-          <span className="text-emerald-400 font-semibold">Aktif</span>
+          <span className="text-emerald-400 font-semibold">Active</span>
         </div>
         <div className="text-[10px] text-slate-600 mt-1">AES-256-GCM Zero-Knowledge</div>
       </div>

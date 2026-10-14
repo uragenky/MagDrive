@@ -107,7 +107,7 @@ pub async fn start_oauth_flow(
 
                         let html_response = r#"<!DOCTYPE html>
 <html>
-<head><title>MagDrive - Login Berhasil</title>
+<head><title>MagDrive - Authentication Successful</title>
 <style>
 body { font-family: -apple-system, sans-serif; display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0; background: #0f172a; color: #f8fafc; text-align: center; }
 .card { padding: 40px; border-radius: 12px; background: #1e293b; box-shadow: 0 10px 25px rgba(0,0,0,0.5); }
@@ -117,8 +117,8 @@ p { color: #94a3b8; }
 </head>
 <body>
 <div class="card">
-  <h1>Autentikasi Berhasil</h1>
-  <p>Anda dapat menutup jendela peramban ini dan kembali ke aplikasi MagDrive.</p>
+  <h1>Authentication Successful</h1>
+  <p>You can safely close this browser tab and return to the MagDrive desktop app.</p>
 </div>
 </body>
 </html>"#;

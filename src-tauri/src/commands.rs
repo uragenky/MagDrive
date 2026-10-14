@@ -1,4 +1,6 @@
 use base64::Engine;
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::sync::Mutex;
 use tauri::{AppHandle, Emitter, State};
 use uuid::Uuid;
@@ -17,9 +19,33 @@ use crate::magnet::parser::{generate_magnet_link, parse_magnet_link, MagnetInfo}
 use crate::storage::db::{Database, TransferRecord};
 use crate::vault::model::{VaultExportPayload, VaultRecord, VaultRole, VaultTarget};
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UploadSessionInfo {
+    pub session_id: String,
+    pub transfer_id: String,
+    pub chunk_size: usize,
+    pub total_chunks: usize,
+}
+
+#[derive(Debug, Clone)]
+pub struct UploadSession {
+    pub session_id: String,
+    pub transfer_id: String,
+    pub file_name: String,
+    pub total_bytes: u64,
+    pub chunk_size: usize,
+    pub is_folder: bool,
+    pub passphrase: Option<String>,
+    pub temp_file_path: std::path::PathBuf,
+    pub uploaded_cloud_file_ids: Vec<String>,
+    pub is_cancelled: bool,
+    pub is_paused: bool,
+}
+
 pub struct AppState {
     pub db: Database,
     pub keypair: Mutex<Keypair>,
+    pub upload_sessions: Mutex<HashMap<String, UploadSession>>,
 }
 
 // ----------------------------------------------------
@@ -65,7 +91,7 @@ pub async fn start_google_login(
     let client_id = state
         .db
         .get_setting("gcp_client_id")
-        .ok_or("Kredensial GCP belum dikonfigurasi. Masukkan Client ID terlebih dahulu.")?;
+        .ok_or("GCP credentials not configured. Please enter Client ID first.")?;
     let client_secret = state.db.get_setting("gcp_client_secret").unwrap_or_default();
 
     let creds = GcpCredentials {
@@ -108,7 +134,7 @@ pub async fn logout_google(state: State<'_, AppState>) -> Result<(), String> {
 async fn get_drive_client(db: &Database) -> Result<DriveClient, String> {
     let access_token = db
         .get_setting("access_token")
-        .ok_or("Belum terautentikasi ke Google Drive")?;
+        .ok_or("Not authenticated to Google Drive.")?;
 
     let client = DriveClient::new(access_token);
     Ok(client)
@@ -203,7 +229,7 @@ pub async fn export_vault_config(
         .db
         .get_vault(&vault_id)
         .map_err(|e| e.to_string())?
-        .ok_or("Vault tidak ditemukan")?;
+        .ok_or("Vault not found.")?;
 
     let export_role = role.parse::<VaultRole>().map_err(|e| e.to_string())?;
 
@@ -242,7 +268,7 @@ pub async fn import_vault_config(
     let tag_bytes = hex::decode(&payload.verification_tag).map_err(|e| e.to_string())?;
     let decrypted = decrypt_chunk(&tag_bytes, &derived_key);
     if decrypted.is_err() || decrypted.unwrap() != b"magdrive_valid" {
-        return Err("Passphrase salah. Gagal membuka kunci vault.".into());
+        return Err("Incorrect passphrase. Failed to unlock vault.".into());
     }
 
     let record = VaultRecord {
@@ -319,13 +345,13 @@ pub async fn sync_catalog(
     let vault_id = state
         .db
         .get_setting("active_vault_id")
-        .ok_or("Tidak ada vault yang aktif")?;
+        .ok_or("No active vault selected.")?;
 
     let vault = state
         .db
         .get_vault(&vault_id)
         .map_err(|e| e.to_string())?
-        .ok_or("Vault aktif tidak ditemukan")?;
+        .ok_or("Active vault not found.")?;
 
     let pass = passphrase.unwrap_or_else(|| "magdrive".to_string());
     let salt = hex::decode(&vault.salt_hex).map_err(|e| e.to_string())?;
@@ -343,7 +369,7 @@ pub async fn list_catalog_files(state: State<'_, AppState>) -> Result<Vec<Packag
     let vault_id = state
         .db
         .get_setting("active_vault_id")
-        .ok_or("Tidak ada vault yang aktif")?;
+        .ok_or("No active vault selected.")?;
 
     state.db.list_packages(&vault_id).map_err(|e| e.to_string())
 }
@@ -362,7 +388,7 @@ pub async fn generate_magnet(
         .db
         .get_package(&package_id)
         .map_err(|e| e.to_string())?
-        .ok_or("Berkas tidak ditemukan")?;
+        .ok_or("File not found.")?;
 
     let vault_id = state.db.get_setting("active_vault_id").unwrap_or_default();
     let link = generate_magnet_link(&pkg.package_id, &vault_id, pkg.total_size, &pkg.name);
@@ -378,7 +404,7 @@ pub async fn delete_package(
         .db
         .get_package(&package_id)
         .map_err(|e| e.to_string())?
-        .ok_or("Berkas tidak ditemukan")?;
+        .ok_or("File not found.")?;
 
     let (current_pubkey, sig) = {
         let keypair = state.keypair.lock().unwrap();
@@ -392,7 +418,7 @@ pub async fn delete_package(
     let is_admin = true; // In local vault admin mode
 
     if !is_uploader && !is_admin {
-        return Err("Akses ditolak: Anda hanya dapat menghapus berkas milik Anda sendiri.".into());
+        return Err("Access denied: You can only delete files uploaded by yourself.".into());
     }
 
     // Mark as deleted in local SQLite
@@ -435,16 +461,16 @@ pub async fn upload_file_package(
     let vault_id = state
         .db
         .get_setting("active_vault_id")
-        .ok_or("Tidak ada vault yang aktif")?;
+        .ok_or("No active vault selected.")?;
 
     let vault = state
         .db
         .get_vault(&vault_id)
         .map_err(|e| e.to_string())?
-        .ok_or("Vault tidak ditemukan")?;
+        .ok_or("Vault not found.")?;
 
     if vault.targets.is_empty() {
-        return Err("Vault belum memiliki target Google Drive. Tambahkan target di menu Settings.".into());
+        return Err("Vault has no Google Drive targets configured. Please add targets in the Settings menu.".into());
     }
 
     let raw_bytes = base64::engine::general_purpose::STANDARD
@@ -618,17 +644,17 @@ pub async fn download_package(
         .db
         .get_package(&package_id)
         .map_err(|e| e.to_string())?
-        .ok_or("Berkas tidak ditemukan di katalog")?;
+        .ok_or("File not found in catalog.")?;
 
     let vault_id = state
         .db
         .get_setting("active_vault_id")
-        .ok_or("Tidak ada vault aktif")?;
+        .ok_or("No active vault selected.")?;
     let vault = state
         .db
         .get_vault(&vault_id)
         .map_err(|e| e.to_string())?
-        .ok_or("Vault aktif tidak ditemukan")?;
+        .ok_or("Active vault not found.")?;
 
     let pass = passphrase.unwrap_or_else(|| "magdrive".to_string());
     let salt = hex::decode(&vault.salt_hex).map_err(|e| e.to_string())?;
@@ -674,7 +700,7 @@ pub async fn download_package(
             pkg.erasure_schema.parity_shards,
             stripe_len,
         )
-        .map_err(|e| format!("Gagal memulihkan potongan stripe {}: {}", s_idx, e))?;
+        .map_err(|e| format!("Failed to reconstruct stripe {}: {}", s_idx, e))?;
 
         assembled_bytes.extend_from_slice(&reconstructed);
 
@@ -688,9 +714,410 @@ pub async fn download_package(
     // Verify final SHA-256 integrity
     let actual_sha = compute_sha256(&assembled_bytes);
     if actual_sha != pkg.original_sha256 {
-        return Err("Integritas berkas korup: SHA-256 tidak cocok".into());
+        return Err("File integrity corrupted: SHA-256 checksum mismatch.".into());
     }
 
     let b64 = base64::engine::general_purpose::STANDARD.encode(&assembled_bytes);
     Ok(b64)
+}
+
+// ----------------------------------------------------
+// Streaming Upload & Transfer Queue Control Commands
+// ----------------------------------------------------
+
+#[tauri::command]
+pub async fn init_upload_session(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    file_name: String,
+    total_bytes: u64,
+    chunk_size: usize,
+    is_folder: bool,
+    passphrase: Option<String>,
+) -> Result<UploadSessionInfo, String> {
+    let vault_id = state
+        .db
+        .get_setting("active_vault_id")
+        .ok_or("No active vault selected.")?;
+
+    let vault = state
+        .db
+        .get_vault(&vault_id)
+        .map_err(|e| e.to_string())?
+        .ok_or("Vault not found.")?;
+
+    if vault.targets.is_empty() {
+        return Err("Vault has no Google Drive targets configured. Please add targets in the Settings menu.".into());
+    }
+
+    let session_id = format!("ses_{}", Uuid::new_v4().simple());
+    let transfer_id = format!("tx_{}", Uuid::new_v4().simple());
+    let package_id = format!("pkg_{}", Uuid::new_v4().simple());
+
+    // Create temp buffer file on local disk
+    let temp_file_path = std::env::temp_dir().join(format!("magdrive_{}.tmp", session_id));
+    let _ = std::fs::File::create(&temp_file_path)
+        .map_err(|e| format!("Failed to create local temp buffer file: {}", e))?;
+
+    let record = TransferRecord {
+        id: transfer_id.clone(),
+        package_id,
+        name: file_name.clone(),
+        transfer_type: "upload".to_string(),
+        total_bytes,
+        transferred_bytes: 0,
+        status: "transferring".to_string(),
+        error_message: None,
+        updated_at: chrono::Utc::now().timestamp(),
+    };
+    state.db.upsert_transfer(&record).map_err(|e| e.to_string())?;
+
+    let effective_chunk_size = chunk_size.max(1024 * 1024); // at least 1MB
+    let total_chunks = if total_bytes == 0 {
+        1
+    } else {
+        ((total_bytes as usize + effective_chunk_size - 1) / effective_chunk_size).max(1)
+    };
+
+    let session = UploadSession {
+        session_id: session_id.clone(),
+        transfer_id: transfer_id.clone(),
+        file_name,
+        total_bytes,
+        chunk_size: effective_chunk_size,
+        is_folder,
+        passphrase,
+        temp_file_path,
+        uploaded_cloud_file_ids: Vec::new(),
+        is_cancelled: false,
+        is_paused: false,
+    };
+
+    state.upload_sessions.lock().unwrap().insert(session_id.clone(), session);
+
+    let _ = app.emit("transfer-progress", serde_json::json!({
+        "transfer_id": transfer_id,
+        "transferred": 0,
+        "total": total_bytes
+    }));
+
+    Ok(UploadSessionInfo {
+        session_id,
+        transfer_id,
+        chunk_size: effective_chunk_size,
+        total_chunks,
+    })
+}
+
+#[tauri::command]
+pub async fn upload_chunk_part(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    session_id: String,
+    _chunk_index: usize,
+    chunk_bytes_base64: String,
+) -> Result<(), String> {
+    let (temp_path, transfer_id, is_cancelled, is_paused) = {
+        let sessions = state.upload_sessions.lock().unwrap();
+        let session = sessions.get(&session_id).ok_or("Upload session not found or expired")?;
+        (
+            session.temp_file_path.clone(),
+            session.transfer_id.clone(),
+            session.is_cancelled,
+            session.is_paused,
+        )
+    };
+
+    if is_cancelled {
+        return Err("Upload cancelled by user.".into());
+    }
+
+    if is_paused {
+        return Err("Upload is currently paused.".into());
+    }
+
+    let part_bytes = base64::engine::general_purpose::STANDARD
+        .decode(&chunk_bytes_base64)
+        .map_err(|e| format!("Invalid base64 chunk: {}", e))?;
+
+    use std::io::Write;
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&temp_path)
+        .map_err(|e| format!("Failed to append to temp file: {}", e))?;
+
+    file.write_all(&part_bytes).map_err(|e| format!("Failed writing chunk: {}", e))?;
+    file.flush().map_err(|e| format!("Failed flushing chunk: {}", e))?;
+
+    let file_len = std::fs::metadata(&temp_path).map(|m| m.len()).unwrap_or(0);
+    if let Ok(Some(mut tx)) = state.db.get_transfer(&transfer_id) {
+        tx.transferred_bytes = file_len;
+        tx.updated_at = chrono::Utc::now().timestamp();
+        let _ = state.db.upsert_transfer(&tx);
+
+        let _ = app.emit("transfer-progress", serde_json::json!({
+            "transfer_id": transfer_id,
+            "transferred": file_len,
+            "total": tx.total_bytes
+        }));
+    }
+
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn finish_upload_session(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    session_id: String,
+) -> Result<String, String> {
+    let session = {
+        let mut sessions = state.upload_sessions.lock().unwrap();
+        sessions.remove(&session_id).ok_or("Upload session not found or already completed")?
+    };
+
+    if session.is_cancelled {
+        let _ = std::fs::remove_file(&session.temp_file_path);
+        return Err("Upload cancelled by user.".into());
+    }
+
+    let vault_id = state
+        .db
+        .get_setting("active_vault_id")
+        .ok_or("No active vault selected.")?;
+
+    let vault = state
+        .db
+        .get_vault(&vault_id)
+        .map_err(|e| e.to_string())?
+        .ok_or("Vault not found.")?;
+
+    let raw_bytes = match std::fs::read(&session.temp_file_path) {
+        Ok(b) => b,
+        Err(e) => {
+            let _ = std::fs::remove_file(&session.temp_file_path);
+            let _ = state.db.update_transfer_status(&session.transfer_id, "failed", Some(&e.to_string()));
+            return Err(format!("Failed reading buffered temp file: {}", e));
+        }
+    };
+
+    // Clean up local temp file now that it's in memory
+    let _ = std::fs::remove_file(&session.temp_file_path);
+
+    let total_size = raw_bytes.len() as u64;
+    let original_sha256 = compute_sha256(&raw_bytes);
+    let package_id = format!("pkg_{}", Uuid::new_v4().simple());
+
+    let pass = session.passphrase.unwrap_or_else(|| "magdrive".to_string());
+    let salt = hex::decode(&vault.salt_hex).map_err(|e| e.to_string())?;
+    let key = derive_master_key(&pass, &salt).map_err(|e| e.to_string())?;
+
+    let uploader_pubkey = state.keypair.lock().unwrap().public_key_hex();
+
+    let (data_shards, parity_shards) = if vault.targets.len() >= 3 {
+        (2, 1)
+    } else if vault.targets.len() == 2 {
+        (1, 1)
+    } else {
+        (1, 0)
+    };
+
+    let client = get_drive_client(&state.db).await?;
+    let mut uploaded_cloud_ids: Vec<String> = Vec::new();
+
+    let chunk_size = session.chunk_size;
+    let mut stripes = Vec::new();
+    let num_stripes = (raw_bytes.len() + chunk_size - 1) / chunk_size.max(1);
+
+    for s_idx in 0..num_stripes {
+        let start = s_idx * chunk_size;
+        let end = (start + chunk_size).min(raw_bytes.len());
+        let stripe_data = &raw_bytes[start..end];
+
+        let (shards, _) = encode(stripe_data, data_shards, parity_shards)
+            .map_err(|e| e.to_string())?;
+
+        let mut chunk_refs = Vec::new();
+
+        for (shard_idx, shard) in shards.iter().enumerate() {
+            let encrypted_shard = encrypt_chunk(shard, &key).map_err(|e| e.to_string())?;
+            let shard_sha = compute_sha256(&encrypted_shard);
+            let chunk_file_name = format!("chunk_{}_{}.bin", package_id, shard_sha);
+
+            let target_idx = shard_idx % vault.targets.len();
+            let target = &vault.targets[target_idx];
+
+            let chunks_dir = client
+                .ensure_folder(&target.target_id, ".magdrive")
+                .await
+                .map_err(|e| e.to_string())?;
+            let chunks_sub = client
+                .ensure_folder(&chunks_dir, "chunks")
+                .await
+                .map_err(|e| e.to_string())?;
+
+            let uploaded_file_id = match client.upload_file(&chunks_sub, &chunk_file_name, &encrypted_shard).await {
+                Ok(fid) => fid,
+                Err(e) => {
+                    // On upload error, delete any previously uploaded chunk files on the drive!
+                    let client_clone = client.clone();
+                    let cleanup_ids = uploaded_cloud_ids.clone();
+                    tokio::spawn(async move {
+                        for fid in cleanup_ids {
+                            let _ = client_clone.delete_file(&fid).await;
+                        }
+                    });
+                    let _ = state.db.update_transfer_status(&session.transfer_id, "failed", Some(&e.to_string()));
+                    return Err(format!("Cloud chunk upload failed: {}", e));
+                }
+            };
+
+            uploaded_cloud_ids.push(uploaded_file_id.clone());
+
+            chunk_refs.push(ChunkRef {
+                shard_index: shard_idx,
+                target_id: target.target_id.clone(),
+                file_id: uploaded_file_id,
+                sha256: shard_sha,
+            });
+        }
+
+        stripes.push(Stripe {
+            stripe_index: s_idx,
+            chunks: chunk_refs,
+        });
+    }
+
+    let manifest = PackageManifest {
+        version: 1,
+        package_id: package_id.clone(),
+        pkg_type: if session.is_folder { PackageType::Folder } else { PackageType::File },
+        name: session.file_name.clone(),
+        total_size,
+        original_sha256,
+        uploader_pubkey,
+        deleted: false,
+        deletion_signature: None,
+        chunk_size,
+        erasure_schema: ErasureSchema {
+            data_shards,
+            parity_shards,
+        },
+        tree: vec![],
+        stripes,
+        created_at: chrono::Utc::now().timestamp(),
+    };
+
+    let manifest_bytes = manifest.encrypt(&key).map_err(|e| e.to_string())?;
+    let manifest_file_name = format!("meta_{}.enc", package_id);
+
+    for target in &vault.targets {
+        if let Ok(magdrive_dir) = client.ensure_folder(&target.target_id, ".magdrive").await {
+            if let Ok(meta_dir) = client.ensure_folder(&magdrive_dir, "metadata").await {
+                let _ = client.upload_file(&meta_dir, &manifest_file_name, &manifest_bytes).await;
+            }
+        }
+    }
+
+    state.db.upsert_package(&vault.id, &manifest).map_err(|e| e.to_string())?;
+
+    if let Ok(Some(mut tx)) = state.db.get_transfer(&session.transfer_id) {
+        tx.package_id = package_id.clone();
+        tx.status = "completed".to_string();
+        tx.transferred_bytes = total_size;
+        tx.updated_at = chrono::Utc::now().timestamp();
+        let _ = state.db.upsert_transfer(&tx);
+    }
+
+    let _ = app.emit("transfer-progress", serde_json::json!({
+        "transfer_id": session.transfer_id,
+        "transferred": total_size,
+        "total": total_size
+    }));
+
+    Ok(package_id)
+}
+
+#[tauri::command]
+pub async fn pause_transfer(state: State<'_, AppState>, transfer_id: String) -> Result<(), String> {
+    state.db.update_transfer_status(&transfer_id, "paused", None).map_err(|e| e.to_string())?;
+    let mut sessions = state.upload_sessions.lock().unwrap();
+    for session in sessions.values_mut() {
+        if session.transfer_id == transfer_id {
+            session.is_paused = true;
+        }
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn resume_transfer(state: State<'_, AppState>, transfer_id: String) -> Result<(), String> {
+    state.db.update_transfer_status(&transfer_id, "transferring", None).map_err(|e| e.to_string())?;
+    let mut sessions = state.upload_sessions.lock().unwrap();
+    for session in sessions.values_mut() {
+        if session.transfer_id == transfer_id {
+            session.is_paused = false;
+        }
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn cancel_transfer(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    transfer_id: String,
+) -> Result<(), String> {
+    state.db.update_transfer_status(&transfer_id, "cancelled", None).map_err(|e| e.to_string())?;
+
+    let mut session_to_cleanup = None;
+    {
+        let mut sessions = state.upload_sessions.lock().unwrap();
+        let mut found_key = None;
+        for (key, s) in sessions.iter_mut() {
+            if s.transfer_id == transfer_id {
+                s.is_cancelled = true;
+                found_key = Some(key.clone());
+                break;
+            }
+        }
+        if let Some(key) = found_key {
+            session_to_cleanup = sessions.remove(&key);
+        }
+    }
+
+    if let Some(session) = session_to_cleanup {
+        let _ = std::fs::remove_file(&session.temp_file_path);
+
+        // Clean up any uploaded cloud files in background
+        if !session.uploaded_cloud_file_ids.is_empty() {
+            let db_clone = state.db.clone();
+            let cloud_ids = session.uploaded_cloud_file_ids;
+            tokio::spawn(async move {
+                if let Ok(client) = get_drive_client(&db_clone).await {
+                    for fid in cloud_ids {
+                        let _ = client.delete_file(&fid).await;
+                    }
+                }
+            });
+        }
+    }
+
+    let _ = app.emit("transfer-progress", serde_json::json!({
+        "transfer_id": transfer_id,
+        "cancelled": true
+    }));
+
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn delete_transfer(state: State<'_, AppState>, transfer_id: String) -> Result<(), String> {
+    state.db.delete_transfer(&transfer_id).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn clear_finished_transfers(state: State<'_, AppState>) -> Result<(), String> {
+    state.db.clear_finished_transfers().map_err(|e| e.to_string())
 }

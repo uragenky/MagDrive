@@ -458,6 +458,72 @@ impl Database {
         }
         Ok(list)
     }
+
+    pub fn get_transfer(&self, id: &str) -> Result<Option<TransferRecord>, StorageError> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, package_id, name, transfer_type, total_bytes, transferred_bytes, status, error_message, updated_at FROM transfers WHERE id = ?1",
+        )?;
+        let mut rows = stmt.query_map(params![id], |row| {
+            let id: String = row.get(0)?;
+            let package_id: String = row.get(1)?;
+            let name: String = row.get(2)?;
+            let transfer_type: String = row.get(3)?;
+            let total_bytes: i64 = row.get(4)?;
+            let transferred_bytes: i64 = row.get(5)?;
+            let status: String = row.get(6)?;
+            let error_message: Option<String> = row.get(7)?;
+            let updated_at: i64 = row.get(8)?;
+
+            Ok(TransferRecord {
+                id,
+                package_id,
+                name,
+                transfer_type,
+                total_bytes: total_bytes as u64,
+                transferred_bytes: transferred_bytes as u64,
+                status,
+                error_message,
+                updated_at,
+            })
+        })?;
+
+        if let Some(r) = rows.next() {
+            Ok(Some(r?))
+        } else {
+            Ok(None)
+        }
+    }
+
+    pub fn delete_transfer(&self, id: &str) -> Result<(), StorageError> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute("DELETE FROM transfers WHERE id = ?1", params![id])?;
+        Ok(())
+    }
+
+    pub fn clear_finished_transfers(&self) -> Result<(), StorageError> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "DELETE FROM transfers WHERE status IN ('completed', 'cancelled', 'failed')",
+            [],
+        )?;
+        Ok(())
+    }
+
+    pub fn update_transfer_status(
+        &self,
+        id: &str,
+        status: &str,
+        error_message: Option<&str>,
+    ) -> Result<(), StorageError> {
+        let conn = self.conn.lock().unwrap();
+        let now = chrono::Utc::now().timestamp();
+        conn.execute(
+            "UPDATE transfers SET status = ?2, error_message = ?3, updated_at = ?4 WHERE id = ?1",
+            params![id, status, error_message, now],
+        )?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -486,5 +552,31 @@ mod tests {
         let list = db.list_vaults().unwrap();
         assert_eq!(list.len(), 1);
         assert_eq!(list[0].name, "Alpha Group");
+
+        // Transfers test
+        let tx = TransferRecord {
+            id: "tx_1".to_string(),
+            package_id: "pkg_1".to_string(),
+            name: "test.bin".to_string(),
+            transfer_type: "upload".to_string(),
+            total_bytes: 1000,
+            transferred_bytes: 500,
+            status: "transferring".to_string(),
+            error_message: None,
+            updated_at: 1000,
+        };
+        db.upsert_transfer(&tx).unwrap();
+        let txs = db.list_transfers().unwrap();
+        assert_eq!(txs.len(), 1);
+        assert_eq!(txs[0].status, "transferring");
+
+        db.update_transfer_status("tx_1", "paused", None).unwrap();
+        let updated = db.get_transfer("tx_1").unwrap().unwrap();
+        assert_eq!(updated.status, "paused");
+
+        db.update_transfer_status("tx_1", "completed", None).unwrap();
+        db.clear_finished_transfers().unwrap();
+        let empty = db.list_transfers().unwrap();
+        assert_eq!(empty.len(), 0);
     }
 }

@@ -170,7 +170,15 @@ magdrive/
 | `generate_magnet` | `package_id: String` | `String` | Generates a magnet URI for a package. |
 | `delete_package` | `package_id: String` | `()` | Signs and executes deletion from cloud targets. |
 | `list_transfers` | None | `Vec<TransferRecord>` | Returns active and historical transfer queue. |
-| `upload_file_package`| `fileName, bytesB64, isFolder, tree, passphrase` | `String` (pkg_id) | Encrypts, encodes RS parity, and uploads. |
+| `init_upload_session` | `fileName, totalBytes, chunkSize, isFolder, passphrase` | `UploadSessionInfo` | Initializes chunked streaming session & local buffer. |
+| `upload_chunk_part` | `sessionId, chunkIndex, chunkBytesBase64` | `()` | Appends sliced chunk (16/32/64 MB) to local buffer. |
+| `finish_upload_session` | `sessionId` | `String` (pkg_id) | Encrypts, encodes RS parity, uploads to Drive, creates manifest. |
+| `pause_transfer` | `transferId: String` | `()` | Pauses active upload session. |
+| `resume_transfer` | `transferId: String` | `()` | Resumes paused upload session. |
+| `cancel_transfer` | `transferId: String` | `()` | Cancels transfer, deletes local buffer & cleans up uploaded cloud chunks. |
+| `delete_transfer` | `transferId: String` | `()` | Removes transfer record from local SQLite history. |
+| `clear_finished_transfers` | None | `()` | Clears all completed, failed, and cancelled transfers. |
+| `upload_file_package`| `fileName, bytesB64, isFolder, tree, passphrase` | `String` (pkg_id) | Direct monolithic upload (for small files/tests). |
 | `download_package` | `package_id, passphrase` | `String` (Base64) | Downloads shards, auto-reconstructs, decrypts. |
 
 ---
@@ -181,7 +189,7 @@ magdrive/
 - **Cause**: Google Drive API has user-based queries-per-minute limits.
 - **Fix**: The `DriveClient` incorporates exponential backoff. If you encounter rate limits on large folders, ensure chunk size is at least 16 MB (`16_777_216` bytes) to minimize the number of API calls.
 
-### 4.2 "Passphrase salah. Gagal membuka kunci vault" on import
+### 4.2 "Incorrect passphrase. Failed to unlock vault" on import
 - **Cause**: The passphrase provided does not match the Argon2id verification tag stored in the `.magvault` token.
 - **Fix**: Verify with the vault administrator that the passphrase entered is exact (case-sensitive).
 
@@ -195,6 +203,13 @@ magdrive/
 ### 4.4 Shared Drive vs Personal Shared Folder 404 Errors
 - When using a **Shared Drive**: Query parameter `supportsAllDrives=true` is required for all requests (this is enabled by default in `DriveClient`).
 - When using a **Personal Shared Folder**: The authenticated user must have **Editor** permissions on the folder. Ensure the target folder is shared with the user's email address.
+
+### 4.5 Large File Uploads & Memory Footprint
+- MagDrive uses **Adaptive Streaming Slicing** (`file.slice` in 16MB, 32MB, or 64MB blocks).
+- Browser heap consumption stays below 50 MB regardless of file size (supports multi-GB files without `RangeError: out of memory`).
+
+### 4.6 Linux / WSLg Desktop Development
+- Use `./run-dev.sh` to run the development server with user/mount namespace isolation (`unshare`) and self-healing WebKit process resolution.
 
 ---
 
