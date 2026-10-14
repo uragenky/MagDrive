@@ -13,6 +13,20 @@ import {
   TransferProgressPayload,
 } from '../types';
 
+// Fast native FileReader blob-to-base64 conversion (avoids large JS string allocations)
+function blobToBase64(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const dataUrl = reader.result as string;
+      const commaIdx = dataUrl.indexOf(',');
+      resolve(commaIdx !== -1 ? dataUrl.slice(commaIdx + 1) : dataUrl);
+    };
+    reader.onerror = (err) => reject(err);
+    reader.readAsDataURL(blob);
+  });
+}
+
 export const api = {
   // GCP & OAuth
   getGcpSettings: () => invoke<GcpCredentials | null>('get_gcp_settings'),
@@ -123,18 +137,7 @@ export const api = {
       while (offset < file.size) {
         const end = Math.min(offset + chunkSize, file.size);
         const slice = file.slice(offset, end);
-        const buffer = await slice.arrayBuffer();
-
-        let binary = '';
-        const bytes = new Uint8Array(buffer);
-        const len = bytes.byteLength;
-        for (let i = 0; i < len; i += 8192) {
-          binary += String.fromCharCode.apply(
-            null,
-            bytes.subarray(i, Math.min(i + 8192, len)) as any
-          );
-        }
-        const b64Part = btoa(binary);
+        const b64Part = await blobToBase64(slice);
 
         await api.uploadChunkPart(session.session_id, chunkIndex, b64Part);
 

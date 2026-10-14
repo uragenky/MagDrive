@@ -1,6 +1,8 @@
 use base64::Engine;
+use futures::StreamExt;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Emitter, State};
 use uuid::Uuid;
@@ -550,6 +552,163 @@ pub async fn delete_package(
 // Transfer & File Pipeline Commands
 // ----------------------------------------------------
 
+struct UploadProgressNotifier {
+    app: AppHandle,
+    db: Database,
+    transfer_id: String,
+    total_size: u64,
+    total_shards: usize,
+    start_instant: std::time::Instant,
+    uploaded_shards_count: AtomicUsize,
+    transferred_cloud_bytes: AtomicU64,
+}
+
+impl UploadProgressNotifier {
+    pub fn new(
+        app: AppHandle,
+        db: Database,
+        transfer_id: String,
+        total_size: u64,
+        total_shards: usize,
+    ) -> Self {
+        Self {
+            app,
+            db,
+            transfer_id,
+            total_size,
+            total_shards,
+            start_instant: std::time::Instant::now(),
+            uploaded_shards_count: AtomicUsize::new(0),
+            transferred_cloud_bytes: AtomicU64::new(0),
+        }
+    }
+
+    pub fn record_shard_uploaded(&self, shard_len: u64, target_label: &str) {
+        let shards_done = self.uploaded_shards_count.fetch_add(1, Ordering::SeqCst) + 1;
+        let cloud_bytes = self.transferred_cloud_bytes.fetch_add(shard_len, Ordering::SeqCst) + shard_len;
+
+        let elapsed_secs = self.start_instant.elapsed().as_secs_f64().max(0.05);
+        let speed_bps = (cloud_bytes as f64 / elapsed_secs) as u64;
+
+        let progress_ratio = (shards_done as f64 / self.total_shards.max(1) as f64).min(1.0);
+        let transferred_bytes = (self.total_size as f64 * progress_ratio) as u64;
+        let remaining_bytes = self.total_size.saturating_sub(transferred_bytes);
+        let eta_seconds = if speed_bps > 0 { remaining_bytes / speed_bps.max(1) } else { 0 };
+
+        let _ = self.app.emit("transfer-progress", serde_json::json!({
+            "transfer_id": self.transfer_id,
+            "stage": "uploading_shards",
+            "current_shard": shards_done,
+            "total_shards": self.total_shards,
+            "transferred": transferred_bytes,
+            "transferred_bytes": transferred_bytes,
+            "total": self.total_size,
+            "total_bytes": self.total_size,
+            "speed_bps": speed_bps,
+            "eta_seconds": eta_seconds,
+            "target_label": target_label,
+            "status": "transferring"
+        }));
+
+        if let Ok(Some(mut tx)) = self.db.get_transfer(&self.transfer_id) {
+            tx.transferred_bytes = transferred_bytes;
+            tx.updated_at = chrono::Utc::now().timestamp();
+            let _ = self.db.upsert_transfer(&tx);
+        }
+    }
+}
+
+async fn process_stripe_task(
+    s_idx: usize,
+    stripe_data: Vec<u8>,
+    data_shards: usize,
+    parity_shards: usize,
+    key: [u8; 32],
+    package_id: String,
+    targets: Vec<VaultTarget>,
+    resolved_chunks_dirs: Vec<String>,
+    client: DriveClient,
+    progress: Arc<UploadProgressNotifier>,
+    uploaded_cloud_ids: Option<Arc<Mutex<Vec<String>>>>,
+) -> Result<Stripe, String> {
+    // 1. Reed-Solomon encoding in blocking thread
+    let shards = tokio::task::spawn_blocking(move || {
+        let (encoded_shards, _) = encode(&stripe_data, data_shards, parity_shards)
+            .map_err(|e| e.to_string())?;
+        Ok::<_, String>(encoded_shards)
+    })
+    .await
+    .map_err(|e| format!("Encode join error: {}", e))??;
+
+    // 2. Parallel AES-256-GCM encryption + SHA256 per shard across CPU cores
+    let mut crypto_futures = Vec::new();
+    for (shard_idx, shard) in shards.into_iter().enumerate() {
+        let key_clone = key;
+        let pkg_id_clone = package_id.clone();
+        crypto_futures.push(tokio::task::spawn_blocking(move || {
+            let encrypted = encrypt_chunk(&shard, &key_clone).map_err(|e| e.to_string())?;
+            let sha = compute_sha256(&encrypted);
+            let file_name = format!("chunk_{}_{}.bin", pkg_id_clone, sha);
+            Ok::<_, String>((shard_idx, encrypted, sha, file_name))
+        }));
+    }
+
+    let crypto_results_raw = futures::future::join_all(crypto_futures).await;
+    let mut crypto_results = Vec::new();
+    for res in crypto_results_raw {
+        let item = res.map_err(|e| format!("Crypto task join error: {}", e))??;
+        crypto_results.push(item);
+    }
+
+    // 3. Upload all shards of this stripe concurrently across targets
+    let mut shard_futures = Vec::new();
+    for (shard_idx, encrypted_shard, shard_sha, chunk_file_name) in crypto_results {
+        let target_idx = shard_idx % targets.len();
+        let target = targets[target_idx].clone();
+        let chunks_sub = resolved_chunks_dirs[target_idx].clone();
+        let client_clone = client.clone();
+        let shard_len = encrypted_shard.len() as u64;
+        let progress_clone = progress.clone();
+        let uploaded_ids_clone = uploaded_cloud_ids.clone();
+
+        shard_futures.push(async move {
+            let fid = client_clone
+                .upload_file(&chunks_sub, &chunk_file_name, &encrypted_shard)
+                .await
+                .map_err(|e| e.to_string())?;
+
+            if let Some(ref ids) = uploaded_ids_clone {
+                let mut lock = ids.lock().unwrap();
+                lock.push(fid.clone());
+            }
+
+            progress_clone.record_shard_uploaded(shard_len, &target.label);
+
+            Ok::<_, String>((shard_idx, target.target_id, fid, shard_sha))
+        });
+    }
+
+    let results = futures::future::join_all(shard_futures).await;
+    let mut chunk_refs = Vec::new();
+
+    for res in results {
+        let (shard_idx, target_id, uploaded_file_id, shard_sha) = res?;
+        chunk_refs.push(ChunkRef {
+            shard_index: shard_idx,
+            target_id,
+            file_id: uploaded_file_id,
+            sha256: shard_sha,
+        });
+    }
+
+    chunk_refs.sort_by_key(|c| c.shard_index);
+
+    Ok(Stripe {
+        stripe_index: s_idx,
+        chunks: chunk_refs,
+    })
+}
+
 #[tauri::command]
 pub async fn list_transfers(state: State<'_, AppState>) -> Result<Vec<TransferRecord>, String> {
     state.db.list_transfers().map_err(|e| e.to_string())
@@ -667,92 +826,55 @@ pub async fn upload_file_package(
         }
     }
 
-    let mut stripes = Vec::new();
-    let mut uploaded_shards_count: usize = 0;
-    let mut transferred_cloud_bytes: u64 = 0;
-    let start_upload_instant = std::time::Instant::now();
+    let progress = Arc::new(UploadProgressNotifier::new(
+        app.clone(),
+        state.db.clone(),
+        transfer_id.clone(),
+        total_size,
+        total_shards,
+    ));
 
-    for s_idx in 0..num_stripes {
-        let start = s_idx * chunk_size;
-        let end = (start + chunk_size).min(raw_bytes.len());
-        let stripe_data = &raw_bytes[start..end];
+    let concurrency = if num_stripes > 1 { 2 } else { 1 };
+    let raw_bytes_arc = Arc::new(raw_bytes);
+    let pkg_id_for_stream = package_id.clone();
+    let mut stripe_stream = futures::stream::iter(0..num_stripes)
+        .map(|s_idx| {
+            let start = s_idx * chunk_size;
+            let end = (start + chunk_size).min(raw_bytes_arc.len());
+            let stripe_data = raw_bytes_arc[start..end].to_vec();
 
-        // Reed-Solomon encoding
-        let (shards, _) = encode(stripe_data, data_shards, parity_shards)
-            .map_err(|e| e.to_string())?;
-
-        let mut shard_futures = Vec::new();
-
-        for (shard_idx, shard) in shards.iter().enumerate() {
-            let encrypted_shard = encrypt_chunk(shard, &key).map_err(|e| e.to_string())?;
-            let shard_sha = compute_sha256(&encrypted_shard);
-            let chunk_file_name = format!("chunk_{}_{}.bin", package_id, shard_sha);
-
-            let target_idx = shard_idx % vault.targets.len();
-            let target = vault.targets[target_idx].clone();
-            let chunks_sub = resolved_chunks_dirs[target_idx].clone();
             let client_clone = client.clone();
-            let shard_len = encrypted_shard.len() as u64;
+            let targets_clone = vault.targets.clone();
+            let dirs_clone = resolved_chunks_dirs.clone();
+            let progress_clone = progress.clone();
+            let pkg_id_clone = pkg_id_for_stream.clone();
 
-            shard_futures.push(async move {
-                let fid = client_clone
-                    .upload_file(&chunks_sub, &chunk_file_name, &encrypted_shard)
-                    .await
-                    .map_err(|e| e.to_string())?;
-                Ok::<_, String>((shard_idx, target.target_id, fid, shard_sha, shard_len, target.label))
-            });
-        }
+            async move {
+                process_stripe_task(
+                    s_idx,
+                    stripe_data,
+                    data_shards,
+                    parity_shards,
+                    key,
+                    pkg_id_clone,
+                    targets_clone,
+                    dirs_clone,
+                    client_clone,
+                    progress_clone,
+                    None,
+                )
+                .await
+            }
+        })
+        .buffer_unordered(concurrency);
 
-        let results = futures::future::join_all(shard_futures).await;
-        let mut chunk_refs = Vec::new();
-        let mut last_target_label = String::new();
-
-        for res in results {
-            let (shard_idx, target_id, uploaded_file_id, shard_sha, shard_len, target_label) = res?;
-            chunk_refs.push(ChunkRef {
-                shard_index: shard_idx,
-                target_id,
-                file_id: uploaded_file_id,
-                sha256: shard_sha,
-            });
-            uploaded_shards_count += 1;
-            transferred_cloud_bytes += shard_len;
-            last_target_label = target_label;
-        }
-
-        stripes.push(Stripe {
-            stripe_index: s_idx,
-            chunks: chunk_refs,
-        });
-
-        // Compute speed & ETA
-        let elapsed_secs = start_upload_instant.elapsed().as_secs_f64().max(0.1);
-        let speed_bps = (transferred_cloud_bytes as f64 / elapsed_secs) as u64;
-        let transferred = ((s_idx + 1) * chunk_size).min(total_size as usize) as u64;
-        let remaining_bytes = total_size.saturating_sub(transferred);
-        let eta_seconds = if speed_bps > 0 { remaining_bytes / speed_bps.max(1) } else { 0 };
-
-        let _ = app.emit("transfer-progress", serde_json::json!({
-            "transfer_id": transfer_id,
-            "stage": "uploading_shards",
-            "current_shard": uploaded_shards_count,
-            "total_shards": total_shards,
-            "transferred": transferred,
-            "transferred_bytes": transferred,
-            "total": total_size,
-            "total_bytes": total_size,
-            "speed_bps": speed_bps,
-            "eta_seconds": eta_seconds,
-            "target_label": last_target_label,
-            "status": "transferring"
-        }));
-
-        if let Ok(Some(mut tx)) = state.db.get_transfer(&transfer_id) {
-            tx.transferred_bytes = transferred;
-            tx.updated_at = chrono::Utc::now().timestamp();
-            let _ = state.db.upsert_transfer(&tx);
-        }
+    let mut stripes = Vec::with_capacity(num_stripes);
+    while let Some(res) = stripe_stream.next().await {
+        let stripe = res?;
+        stripes.push(stripe);
     }
+
+    stripes.sort_by_key(|s| s.stripe_index);
 
     let manifest = PackageManifest {
         version: 1,
@@ -1144,10 +1266,7 @@ pub async fn finish_upload_session(
     };
 
     let client = get_drive_client(&state.db).await?;
-    let mut uploaded_cloud_ids: Vec<String> = Vec::new();
-
     let chunk_size = session.chunk_size;
-    let mut stripes = Vec::new();
     let num_stripes = (raw_bytes.len() + chunk_size - 1) / chunk_size.max(1);
     let total_shards = num_stripes * (data_shards + parity_shards);
 
@@ -1186,123 +1305,83 @@ pub async fn finish_upload_session(
         }
     }
 
-    let mut uploaded_shards_count: usize = 0;
-    let mut transferred_cloud_bytes: u64 = 0;
-    let start_upload_instant = std::time::Instant::now();
+    let uploaded_cloud_ids = Arc::new(Mutex::new(Vec::new()));
+    let progress = Arc::new(UploadProgressNotifier::new(
+        app.clone(),
+        state.db.clone(),
+        session.transfer_id.clone(),
+        total_size,
+        total_shards,
+    ));
 
-    for s_idx in 0..num_stripes {
-        // Check pause or cancel
-        {
-            let sessions = state.upload_sessions.lock().unwrap();
-            if let Some(s) = sessions.get(&session_id) {
-                if s.is_cancelled {
-                    let client_clone = client.clone();
-                    let cleanup_ids = uploaded_cloud_ids.clone();
-                    tokio::spawn(async move {
-                        for fid in cleanup_ids {
-                            let _ = client_clone.delete_file(&fid).await;
-                        }
-                    });
-                    let _ = state.db.update_transfer_status(&session.transfer_id, "cancelled", None);
+    let concurrency = if num_stripes > 1 { 2 } else { 1 };
+    let raw_bytes_arc = Arc::new(raw_bytes);
+    let pkg_id_for_stream = package_id.clone();
+    let db_clone = state.db.clone();
+    let transfer_id_clone = session.transfer_id.clone();
+
+    let mut stripe_stream = futures::stream::iter(0..num_stripes)
+        .map(|s_idx| {
+            let is_cancelled = {
+                if let Ok(Some(tx)) = db_clone.get_transfer(&transfer_id_clone) {
+                    tx.status == "cancelled"
+                } else {
+                    false
+                }
+            };
+
+            let start = s_idx * chunk_size;
+            let end = (start + chunk_size).min(raw_bytes_arc.len());
+            let stripe_data = raw_bytes_arc[start..end].to_vec();
+
+            let client_clone = client.clone();
+            let targets_clone = vault.targets.clone();
+            let dirs_clone = resolved_chunks_dirs.clone();
+            let progress_clone = progress.clone();
+            let pkg_id_clone = pkg_id_for_stream.clone();
+            let uploaded_ids_clone = uploaded_cloud_ids.clone();
+
+            async move {
+                if is_cancelled {
                     return Err("Transfer cancelled by user.".into());
                 }
+                process_stripe_task(
+                    s_idx,
+                    stripe_data,
+                    data_shards,
+                    parity_shards,
+                    key,
+                    pkg_id_clone,
+                    targets_clone,
+                    dirs_clone,
+                    client_clone,
+                    progress_clone,
+                    Some(uploaded_ids_clone),
+                )
+                .await
             }
-        }
+        })
+        .buffer_unordered(concurrency);
 
-        let start = s_idx * chunk_size;
-        let end = (start + chunk_size).min(raw_bytes.len());
-        let stripe_data = &raw_bytes[start..end];
-
-        let (shards, _) = encode(stripe_data, data_shards, parity_shards)
-            .map_err(|e| e.to_string())?;
-
-        let mut shard_futures = Vec::new();
-
-        for (shard_idx, shard) in shards.iter().enumerate() {
-            let encrypted_shard = encrypt_chunk(shard, &key).map_err(|e| e.to_string())?;
-            let shard_sha = compute_sha256(&encrypted_shard);
-            let chunk_file_name = format!("chunk_{}_{}.bin", package_id, shard_sha);
-
-            let target_idx = shard_idx % vault.targets.len();
-            let target = vault.targets[target_idx].clone();
-            let chunks_sub = resolved_chunks_dirs[target_idx].clone();
-            let client_clone = client.clone();
-            let shard_len = encrypted_shard.len() as u64;
-
-            shard_futures.push(async move {
-                let fid = client_clone
-                    .upload_file(&chunks_sub, &chunk_file_name, &encrypted_shard)
-                    .await
-                    .map_err(|e| e.to_string())?;
-                Ok::<_, String>((shard_idx, target.target_id, fid, shard_sha, shard_len, target.label))
-            });
-        }
-
-        let results = futures::future::join_all(shard_futures).await;
-        let mut chunk_refs = Vec::new();
-        let mut last_target_label = String::new();
-
-        for res in results {
-            match res {
-                Ok((shard_idx, target_id, uploaded_file_id, shard_sha, shard_len, target_label)) => {
-                    uploaded_cloud_ids.push(uploaded_file_id.clone());
-                    chunk_refs.push(ChunkRef {
-                        shard_index: shard_idx,
-                        target_id,
-                        file_id: uploaded_file_id,
-                        sha256: shard_sha,
-                    });
-                    uploaded_shards_count += 1;
-                    transferred_cloud_bytes += shard_len;
-                    last_target_label = target_label;
-                }
-                Err(e) => {
-                    let client_clone = client.clone();
-                    let cleanup_ids = uploaded_cloud_ids.clone();
-                    tokio::spawn(async move {
-                        for fid in cleanup_ids {
-                            let _ = client_clone.delete_file(&fid).await;
-                        }
-                    });
-                    let _ = state.db.update_transfer_status(&session.transfer_id, "failed", Some(&e));
-                    return Err(format!("Cloud chunk upload failed: {}", e));
-                }
+    let mut stripes = Vec::with_capacity(num_stripes);
+    while let Some(res) = stripe_stream.next().await {
+        match res {
+            Ok(stripe) => stripes.push(stripe),
+            Err(e) => {
+                let client_clone = client.clone();
+                let cleanup_ids = uploaded_cloud_ids.lock().unwrap().clone();
+                tokio::spawn(async move {
+                    for fid in cleanup_ids {
+                        let _ = client_clone.delete_file(&fid).await;
+                    }
+                });
+                let _ = state.db.update_transfer_status(&session.transfer_id, "failed", Some(&e));
+                return Err(e);
             }
-        }
-
-        stripes.push(Stripe {
-            stripe_index: s_idx,
-            chunks: chunk_refs,
-        });
-
-        // Compute speed & ETA
-        let elapsed_secs = start_upload_instant.elapsed().as_secs_f64().max(0.1);
-        let speed_bps = (transferred_cloud_bytes as f64 / elapsed_secs) as u64;
-        let transferred = ((s_idx + 1) * chunk_size).min(total_size as usize) as u64;
-        let remaining_bytes = total_size.saturating_sub(transferred);
-        let eta_seconds = if speed_bps > 0 { remaining_bytes / speed_bps.max(1) } else { 0 };
-
-        let _ = app.emit("transfer-progress", serde_json::json!({
-            "transfer_id": session.transfer_id,
-            "stage": "uploading_shards",
-            "current_shard": uploaded_shards_count,
-            "total_shards": total_shards,
-            "transferred": transferred,
-            "transferred_bytes": transferred,
-            "total": total_size,
-            "total_bytes": total_size,
-            "speed_bps": speed_bps,
-            "eta_seconds": eta_seconds,
-            "target_label": last_target_label,
-            "status": "transferring"
-        }));
-
-        if let Ok(Some(mut tx)) = state.db.get_transfer(&session.transfer_id) {
-            tx.transferred_bytes = transferred;
-            tx.updated_at = chrono::Utc::now().timestamp();
-            let _ = state.db.upsert_transfer(&tx);
         }
     }
+
+    stripes.sort_by_key(|s| s.stripe_index);
 
     let manifest = PackageManifest {
         version: 1,

@@ -60,12 +60,20 @@ pub struct DriveClient {
     pub db: Option<Database>,
 }
 
+fn create_optimized_http_client() -> reqwest::Client {
+    reqwest::Client::builder()
+        .tcp_nodelay(true)
+        .tcp_keepalive(Duration::from_secs(60))
+        .pool_idle_timeout(Duration::from_secs(90))
+        .pool_max_idle_per_host(32)
+        .timeout(Duration::from_secs(120))
+        .build()
+        .unwrap_or_default()
+}
+
 impl DriveClient {
     pub fn new(access_token: String) -> Self {
-        let client = reqwest::Client::builder()
-            .timeout(Duration::from_secs(60))
-            .build()
-            .unwrap_or_default();
+        let client = create_optimized_http_client();
         Self {
             client,
             access_token: Arc::new(Mutex::new(access_token)),
@@ -81,10 +89,7 @@ impl DriveClient {
         credentials: Option<GcpCredentials>,
         db: Option<Database>,
     ) -> Self {
-        let client = reqwest::Client::builder()
-            .timeout(Duration::from_secs(60))
-            .build()
-            .unwrap_or_default();
+        let client = create_optimized_http_client();
         Self {
             client,
             access_token: Arc::new(Mutex::new(access_token)),

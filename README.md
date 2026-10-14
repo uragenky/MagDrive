@@ -45,8 +45,11 @@ Files uploaded through MagDrive are:
 - **Integrated Google Permissions RBAC**: Group administrators can invite or revoke member emails from the Shared Drive directly within the app via the Google Drive Permissions API.
 - **Local SQLite Cache**: File lists, metadata, and transfer queues are indexed locally for zero-latency searching and offline catalog browsing.
 - **Adaptive Streaming Upload & Concurrent Shards**: Files are sliced in memory-safe adaptive blocks (16 MB / 32 MB / 64 MB), guaranteeing constant memory consumption (< 50 MB RAM). Shards within each stripe are uploaded concurrently in parallel (`join_all`) across storage targets.
+- **Multi-Stripe Concurrent Pipeline**: Streams up to 2 stripes simultaneously (`buffer_unordered(2)`), keeping up to 6 concurrent upload connections active across 3 Shared Drives for maximum pipe saturation with zero idle gaps between stripes.
+- **Parallel Multi-Core Cryptography**: Reed-Solomon erasure encoding, AES-256-GCM encryption, and SHA-256 hashing run concurrently across physical CPU cores using Tokio blocking threadpool workers.
 - **In-Memory Folder & Key Caching**: Target directory structures (`.magdrive/chunks` and `metadata`) and Argon2id derived master keys are cached in-memory, eliminating up to 16 redundant HTTP queries per transfer and removing repetitive CPU overhead.
-- **Real-Time Transfer Metrics**: Granular multi-stage pipeline indicators (Slicing, Encrypting, Shard Upload, and Finalizing) with real-time transfer speed (`⚡ MB/s`), dynamic ETA (`⏱ ~seconds`), and transferred byte counters.
+- **Optimized HTTP/2 & TCP Sockets**: Kills TCP packet delays via `tcp_nodelay(true)` and maintains warm connection pools (`pool_max_idle_per_host(32)`) to eliminate repetitive TLS handshakes with Google Drive API servers.
+- **Real-Time Per-Shard Transfer Metrics**: Multi-stage progress pipeline (Buffering, Encrypting, Shard Upload, and Finalizing) with live speed (`⚡ MB/s`), dynamic ETA (`⏱ ~seconds`), and instant per-shard counter updates emitted on every shard completion.
 - **Transparent OAuth 2.0 Auto-Refresh & 401 Interceptor**: Tokens are tracked by expiry and proactively refreshed before calls; any reactive HTTP 401 response is automatically intercepted to renew credentials on-the-fly without interrupting running operations.
 - **Transfer Queue Lifecycle & Auto-Cleanup**: Full state machine with Pause, Resume, Cancel, and Delete. Cancelling a transfer automatically removes any orphaned chunks uploaded to Google Drive.
 - **Transfer State Machine**: Resumable chunk transfers equipped with a Leaky Bucket Rate Limiter and Exponential Backoff with Jitter against Google API rate limits (HTTP 429).
@@ -203,7 +206,7 @@ To trigger a release build:
 5. In the MagDrive app:
    - Navigate to **Settings & GCP**.
    - Paste the credentials or import `client_secret.json`.
-   - Click **Hubungkan dengan Google (OAuth 2.0 PKCE)**. A browser window will open to authorize the account via local loopback.
+   - Click **Connect Google Account (OAuth 2.0 PKCE)**. A browser window will open to authorize the account via local loopback.
 
 ---
 
