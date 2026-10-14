@@ -8,14 +8,14 @@ import {
   Check,
   AlertCircle,
 } from 'lucide-react';
-import { VaultRecord } from '../types';
+import { VaultRecord, TransferProgressPayload } from '../types';
 
 interface UploadViewProps {
   activeVault: VaultRecord | null;
   onUploadFile: (
     file: File,
     passphrase?: string,
-    onProgress?: (percent: number, currentChunk: number, totalChunks: number) => void
+    onProgress?: (progress: TransferProgressPayload) => void
   ) => Promise<string>;
   onGoToExplorer: () => void;
 }
@@ -29,7 +29,7 @@ export const UploadView: React.FC<UploadViewProps> = ({
   const [passphrase, setPassphrase] = useState('');
   const [isUploading, setIsUploading] = useState(false);
   const [uploadPercent, setUploadPercent] = useState<number>(0);
-  const [progressStatus, setProgressStatus] = useState<string>('');
+  const [progressDetails, setProgressDetails] = useState<TransferProgressPayload | null>(null);
   const [uploadResult, setUploadResult] = useState<{
     packageId: string;
     magnetLink: string;
@@ -45,6 +45,22 @@ export const UploadView: React.FC<UploadViewProps> = ({
     const sizes = ['B', 'KB', 'MB', 'GB'];
     const i = Math.floor(Math.log(bytes) / Math.log(k));
     return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+  };
+
+  const formatSpeed = (bps: number) => {
+    if (bps <= 0) return '0 B/s';
+    const k = 1024;
+    const sizes = ['B/s', 'KB/s', 'MB/s', 'GB/s'];
+    const i = Math.floor(Math.log(bps) / Math.log(k));
+    return parseFloat((bps / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+  };
+
+  const formatEta = (secs: number) => {
+    if (secs <= 0) return '0s';
+    if (secs < 60) return `${secs}s`;
+    const mins = Math.floor(secs / 60);
+    const rem = secs % 60;
+    return `${mins}m ${rem}s`;
   };
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -63,20 +79,30 @@ export const UploadView: React.FC<UploadViewProps> = ({
       setIsUploading(true);
       setErrorMsg(null);
       setUploadPercent(0);
-      setProgressStatus('Initializing streaming upload session...');
+      setProgressDetails(null);
 
       const pkgId = await onUploadFile(
         selectedFile,
         passphrase || undefined,
-        (pct, chunkIndex, totalChunks) => {
+        (p) => {
+          setProgressDetails(p);
+
+          let pct = 0;
+          if (p.stage === 'slicing') {
+            pct = p.total_bytes > 0 ? Math.min(30, Math.round((p.transferred_bytes / p.total_bytes) * 30)) : 10;
+          } else if (p.stage === 'encrypting') {
+            pct = 35;
+          } else if (p.stage === 'uploading_shards') {
+            const shardRatio = p.total_shards > 0 ? p.current_shard / p.total_shards : 0;
+            pct = 35 + Math.round(shardRatio * 60);
+          } else if (p.stage === 'finalizing') {
+            pct = 96;
+          } else if (p.stage === 'completed') {
+            pct = 100;
+          }
           setUploadPercent(pct);
-          setProgressStatus(
-            `Streaming part ${chunkIndex}/${totalChunks} (${pct}%) • Slicing in memory...`
-          );
         }
       );
-
-      setProgressStatus('Finalizing AES-256-GCM encryption & Reed-Solomon distribution...');
 
       const magnet = `magdrive:?xt=urn:magdrive:${pkgId}&vh=${activeVault.id}&sz=${selectedFile.size}&dn=${encodeURIComponent(
         selectedFile.name
@@ -90,7 +116,7 @@ export const UploadView: React.FC<UploadViewProps> = ({
       setErrorMsg(err?.toString() || 'Failed to upload file.');
     } finally {
       setIsUploading(false);
-      setProgressStatus('');
+      setProgressDetails(null);
       setUploadPercent(0);
     }
   };
@@ -266,16 +292,51 @@ export const UploadView: React.FC<UploadViewProps> = ({
 
                 {/* Progress / Status */}
                 {isUploading && (
-                  <div className="space-y-2 pt-2">
-                    <div className="flex items-center justify-between text-xs text-cyan-400 font-medium">
-                      <span>{progressStatus}</span>
-                      <span className="font-mono">{uploadPercent}%</span>
+                  <div className="space-y-3 pt-3 border-t border-slate-800/80">
+                    <div className="flex items-center justify-between text-xs">
+                      <div className="flex items-center space-x-2">
+                        <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold uppercase tracking-wider bg-cyan-500/10 text-cyan-400 border border-cyan-500/20">
+                          {progressDetails?.stage?.replace('_', ' ') || 'Preparing'}
+                        </span>
+                        <span className="text-slate-300 font-medium text-xs">
+                          {progressDetails?.stage === 'slicing'
+                            ? `Buffering Part ${progressDetails.current_shard}/${progressDetails.total_shards}`
+                            : progressDetails?.stage === 'encrypting'
+                            ? `AES-256-GCM Encryption & RS Parity (${progressDetails.total_shards} shards)`
+                            : progressDetails?.stage === 'uploading_shards'
+                            ? `Uploading Shard ${progressDetails.current_shard}/${progressDetails.total_shards}${progressDetails.target_label ? ` • ${progressDetails.target_label}` : ''}`
+                            : progressDetails?.stage === 'finalizing'
+                            ? 'Broadcasting Encrypted Manifest to All Targets'
+                            : 'Processing upload...'}
+                        </span>
+                      </div>
+                      <span className="font-mono text-cyan-400 font-bold text-xs">{uploadPercent}%</span>
                     </div>
+
                     <div className="w-full h-2 bg-slate-900 rounded-full overflow-hidden border border-slate-800">
                       <div
                         className="h-full bg-gradient-to-r from-cyan-500 to-emerald-400 rounded-full transition-all duration-300"
                         style={{ width: `${uploadPercent}%` }}
                       />
+                    </div>
+
+                    {/* Stats Strip */}
+                    <div className="flex items-center justify-between text-[11px] font-mono text-slate-400 pt-0.5">
+                      <span>
+                        {formatSize(progressDetails?.transferred_bytes || 0)} / {formatSize(selectedFile.size)}
+                      </span>
+                      <div className="flex items-center space-x-3">
+                        {(progressDetails?.speed_bps ?? 0) > 0 && (
+                          <span className="text-cyan-400 font-semibold">
+                            ⚡ {formatSpeed(progressDetails?.speed_bps || 0)}
+                          </span>
+                        )}
+                        {(progressDetails?.eta_seconds ?? 0) > 0 && (
+                          <span className="text-slate-400">
+                            ⏱ ETA: {formatEta(progressDetails?.eta_seconds || 0)}
+                          </span>
+                        )}
+                      </div>
                     </div>
                   </div>
                 )}

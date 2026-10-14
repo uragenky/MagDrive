@@ -95,6 +95,23 @@ export interface GcpCredentials {
   client_secret: string;
 }
 
+export type TransferStage = 'slicing' | 'encrypting' | 'uploading_shards' | 'finalizing' | 'completed' | 'downloading';
+
+export interface TransferProgressPayload {
+  transfer_id: string;
+  stage: TransferStage;
+  current_shard: number;
+  total_shards: number;
+  transferred: number;
+  transferred_bytes: number;
+  total: number;
+  total_bytes: number;
+  speed_bps: number;
+  eta_seconds: number;
+  target_label?: string;
+  status: string;
+}
+
 export interface MagnetInfo {
   package_id: string;
   vault_hint?: string;

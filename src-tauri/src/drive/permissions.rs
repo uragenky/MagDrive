@@ -29,12 +29,21 @@ impl DriveClient {
             target_id
         );
 
-        let res = self
+        let mut res = self
             .client
             .get(&url)
             .headers(self.auth_headers())
             .send()
             .await?;
+
+        if res.status().as_u16() == 401 && self.try_refresh_token().await {
+            res = self
+                .client
+                .get(&url)
+                .headers(self.auth_headers())
+                .send()
+                .await?;
+        }
 
         let status = res.status();
         if !status.is_success() {
@@ -67,13 +76,23 @@ impl DriveClient {
             "emailAddress": email
         });
 
-        let res = self
+        let mut res = self
             .client
             .post(&url)
             .headers(self.auth_headers())
             .json(&body)
             .send()
             .await?;
+
+        if res.status().as_u16() == 401 && self.try_refresh_token().await {
+            res = self
+                .client
+                .post(&url)
+                .headers(self.auth_headers())
+                .json(&body)
+                .send()
+                .await?;
+        }
 
         let status = res.status();
         if !status.is_success() {
@@ -95,12 +114,21 @@ impl DriveClient {
             target_id, permission_id
         );
 
-        let res = self
+        let mut res = self
             .client
             .delete(&url)
             .headers(self.auth_headers())
             .send()
             .await?;
+
+        if res.status().as_u16() == 401 && self.try_refresh_token().await {
+            res = self
+                .client
+                .delete(&url)
+                .headers(self.auth_headers())
+                .send()
+                .await?;
+        }
 
         let status = res.status();
         if status.is_success() || status.as_u16() == 404 {

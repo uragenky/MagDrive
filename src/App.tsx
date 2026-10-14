@@ -13,7 +13,7 @@ import { HealthView } from './components/HealthView';
 import { MagnetModal } from './components/MagnetModal';
 import { VaultModal } from './components/VaultModal';
 
-import { PackageManifest, TransferRecord, VaultRecord, VaultTarget } from './types';
+import { PackageManifest, TransferRecord, VaultRecord, VaultTarget, TransferProgressPayload } from './types';
 import { api } from './services/api';
 
 export function App() {
@@ -167,7 +167,7 @@ export function App() {
   const handleUploadFile = async (
     file: File,
     passphrase?: string,
-    onProgress?: (percent: number, currentChunk: number, totalChunks: number) => void
+    onProgress?: (progress: TransferProgressPayload) => void
   ): Promise<string> => {
     const pkgId = await api.uploadFileStream(file, passphrase, onProgress);
     await refreshFiles();

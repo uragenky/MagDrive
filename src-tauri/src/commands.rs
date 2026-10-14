@@ -1,7 +1,7 @@
 use base64::Engine;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Emitter, State};
 use uuid::Uuid;
 
@@ -46,6 +46,58 @@ pub struct AppState {
     pub db: Database,
     pub keypair: Mutex<Keypair>,
     pub upload_sessions: Mutex<HashMap<String, UploadSession>>,
+    pub folder_cache: Arc<Mutex<HashMap<String, String>>>,
+    pub key_cache: Arc<Mutex<HashMap<String, [u8; 32]>>>,
+}
+
+pub async fn ensure_cached_folder(
+    client: &DriveClient,
+    folder_cache: &Arc<Mutex<HashMap<String, String>>>,
+    parent_id: &str,
+    folder_name: &str,
+) -> Result<String, String> {
+    let key = format!("{}:{}", parent_id, folder_name);
+    {
+        let lock = folder_cache.lock().unwrap();
+        if let Some(id) = lock.get(&key) {
+            return Ok(id.clone());
+        }
+    }
+
+    let id = client
+        .ensure_folder(parent_id, folder_name)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    {
+        let mut lock = folder_cache.lock().unwrap();
+        lock.insert(key, id.clone());
+    }
+
+    Ok(id)
+}
+
+pub fn get_or_derive_master_key(
+    key_cache: &Arc<Mutex<HashMap<String, [u8; 32]>>>,
+    vault_id: &str,
+    passphrase: &str,
+    salt: &[u8],
+) -> Result<[u8; 32], String> {
+    let cache_key = format!("{}:{}", vault_id, compute_sha256(passphrase.as_bytes()));
+    {
+        let lock = key_cache.lock().unwrap();
+        if let Some(k) = lock.get(&cache_key) {
+            return Ok(*k);
+        }
+    }
+
+    let key = derive_master_key(passphrase, salt).map_err(|e| e.to_string())?;
+    {
+        let mut lock = key_cache.lock().unwrap();
+        lock.insert(cache_key, key);
+    }
+
+    Ok(key)
 }
 
 // ----------------------------------------------------
@@ -107,6 +159,8 @@ pub async fn start_google_login(
     tokio::spawn(async move {
         if let Ok(Ok(tokens)) = rx.await {
             let _ = db_clone.set_setting("access_token", &tokens.access_token);
+            let expires_at = chrono::Utc::now().timestamp() + tokens.expires_in as i64;
+            let _ = db_clone.set_setting("token_expires_at", &expires_at.to_string());
             if let Some(ref rt) = tokens.refresh_token {
                 let _ = db_clone.set_setting("refresh_token", rt);
             }
@@ -119,25 +173,78 @@ pub async fn start_google_login(
 
 #[tauri::command]
 pub async fn check_login_status(state: State<'_, AppState>) -> Result<bool, String> {
-    let token = state.db.get_setting("access_token");
-    Ok(token.is_some())
+    let access_token = state.db.get_setting("access_token").unwrap_or_default();
+    let refresh_token = state.db.get_setting("refresh_token").unwrap_or_default();
+
+    if access_token.is_empty() && refresh_token.is_empty() {
+        return Ok(false);
+    }
+
+    match get_drive_client(&state.db).await {
+        Ok(_) => Ok(true),
+        Err(_) => Ok(false),
+    }
 }
 
 #[tauri::command]
 pub async fn logout_google(state: State<'_, AppState>) -> Result<(), String> {
     let _ = state.db.set_setting("access_token", "");
     let _ = state.db.set_setting("refresh_token", "");
+    let _ = state.db.set_setting("token_expires_at", "0");
     Ok(())
 }
 
-// Helper to get active DriveClient with auto-refresh
+// Helper to get active DriveClient with proactive auto-refresh and reactive retry
 async fn get_drive_client(db: &Database) -> Result<DriveClient, String> {
-    let access_token = db
-        .get_setting("access_token")
-        .ok_or("Not authenticated to Google Drive.")?;
+    let mut access_token = db.get_setting("access_token").unwrap_or_default();
+    let refresh_token = db.get_setting("refresh_token").unwrap_or_default();
+    let expires_at: i64 = db.get_setting("token_expires_at")
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0);
 
-    let client = DriveClient::new(access_token);
-    Ok(client)
+    let client_id = db.get_setting("gcp_client_id").unwrap_or_default();
+    let client_secret = db.get_setting("gcp_client_secret").unwrap_or_default();
+    let creds = if !client_id.is_empty() {
+        Some(GcpCredentials { client_id, client_secret })
+    } else {
+        None
+    };
+
+    let now = chrono::Utc::now().timestamp();
+    let needs_refresh = !refresh_token.is_empty() && (access_token.is_empty() || expires_at == 0 || now >= expires_at - 60);
+
+    if needs_refresh {
+        if let Some(ref c) = creds {
+            match crate::drive::oauth::refresh_access_token(c, &refresh_token).await {
+                Ok(new_tokens) => {
+                    let _ = db.set_setting("access_token", &new_tokens.access_token);
+                    let new_expires_at = chrono::Utc::now().timestamp() + new_tokens.expires_in as i64;
+                    let _ = db.set_setting("token_expires_at", &new_expires_at.to_string());
+                    if let Some(ref rt) = new_tokens.refresh_token {
+                        let _ = db.set_setting("refresh_token", rt);
+                    }
+                    access_token = new_tokens.access_token;
+                }
+                Err(e) => {
+                    eprintln!("Warning: Proactive token refresh failed: {}", e);
+                    if access_token.is_empty() {
+                        return Err(format!("Google Drive session expired: {}. Please sign in again in Settings.", e));
+                    }
+                }
+            }
+        }
+    }
+
+    if access_token.is_empty() {
+        return Err("Not authenticated to Google Drive. Please sign in with Google in Settings.".into());
+    }
+
+    Ok(DriveClient::with_refresh(
+        access_token,
+        if refresh_token.is_empty() { None } else { Some(refresh_token) },
+        creds,
+        Some(db.clone()),
+    ))
 }
 
 // ----------------------------------------------------
@@ -483,7 +590,7 @@ pub async fn upload_file_package(
 
     let pass = passphrase.unwrap_or_else(|| "magdrive".to_string());
     let salt = hex::decode(&vault.salt_hex).map_err(|e| e.to_string())?;
-    let key = derive_master_key(&pass, &salt).map_err(|e| e.to_string())?;
+    let key = get_or_derive_master_key(&state.key_cache, &vault.id, &pass, &salt)?;
 
     let uploader_pubkey = state.keypair.lock().unwrap().public_key_hex();
 
@@ -522,8 +629,48 @@ pub async fn upload_file_package(
         total_size.max(1) as usize
     };
 
-    let mut stripes = Vec::new();
     let num_stripes = (raw_bytes.len() + chunk_size - 1) / chunk_size.max(1);
+    let total_shards = num_stripes * (data_shards + parity_shards);
+
+    let _ = app.emit("transfer-progress", serde_json::json!({
+        "transfer_id": transfer_id,
+        "stage": "encrypting",
+        "current_shard": 0,
+        "total_shards": total_shards,
+        "transferred": 0,
+        "transferred_bytes": 0,
+        "total": total_size,
+        "total_bytes": total_size,
+        "speed_bps": 0,
+        "eta_seconds": 0,
+        "status": "transferring"
+    }));
+
+    // Pre-resolve and cache chunks folders for all targets concurrently
+    let mut chunks_dir_futures = Vec::new();
+    for target in &vault.targets {
+        let client_clone = client.clone();
+        let target_id = target.target_id.clone();
+        let cache = state.folder_cache.clone();
+        chunks_dir_futures.push(async move {
+            let magdrive_dir = ensure_cached_folder(&client_clone, &cache, &target_id, ".magdrive").await?;
+            let chunks_dir = ensure_cached_folder(&client_clone, &cache, &magdrive_dir, "chunks").await?;
+            Ok::<String, String>(chunks_dir)
+        });
+    }
+    let target_chunks_dirs = futures::future::join_all(chunks_dir_futures).await;
+    let mut resolved_chunks_dirs = Vec::new();
+    for (idx, res) in target_chunks_dirs.into_iter().enumerate() {
+        match res {
+            Ok(dir) => resolved_chunks_dirs.push(dir),
+            Err(e) => return Err(format!("Failed to initialize folder for target {}: {}", vault.targets[idx].label, e)),
+        }
+    }
+
+    let mut stripes = Vec::new();
+    let mut uploaded_shards_count: usize = 0;
+    let mut transferred_cloud_bytes: u64 = 0;
+    let start_upload_instant = std::time::Instant::now();
 
     for s_idx in 0..num_stripes {
         let start = s_idx * chunk_size;
@@ -534,38 +681,43 @@ pub async fn upload_file_package(
         let (shards, _) = encode(stripe_data, data_shards, parity_shards)
             .map_err(|e| e.to_string())?;
 
-        let mut chunk_refs = Vec::new();
+        let mut shard_futures = Vec::new();
 
         for (shard_idx, shard) in shards.iter().enumerate() {
-            // Encrypt each shard with AES-256-GCM
             let encrypted_shard = encrypt_chunk(shard, &key).map_err(|e| e.to_string())?;
             let shard_sha = compute_sha256(&encrypted_shard);
             let chunk_file_name = format!("chunk_{}_{}.bin", package_id, shard_sha);
 
-            // Distribute to corresponding target
             let target_idx = shard_idx % vault.targets.len();
-            let target = &vault.targets[target_idx];
+            let target = vault.targets[target_idx].clone();
+            let chunks_sub = resolved_chunks_dirs[target_idx].clone();
+            let client_clone = client.clone();
+            let shard_len = encrypted_shard.len() as u64;
 
-            let chunks_dir = client
-                .ensure_folder(&target.target_id, ".magdrive")
-                .await
-                .map_err(|e| e.to_string())?;
-            let chunks_sub = client
-                .ensure_folder(&chunks_dir, "chunks")
-                .await
-                .map_err(|e| e.to_string())?;
+            shard_futures.push(async move {
+                let fid = client_clone
+                    .upload_file(&chunks_sub, &chunk_file_name, &encrypted_shard)
+                    .await
+                    .map_err(|e| e.to_string())?;
+                Ok::<_, String>((shard_idx, target.target_id, fid, shard_sha, shard_len, target.label))
+            });
+        }
 
-            let uploaded_file_id = client
-                .upload_file(&chunks_sub, &chunk_file_name, &encrypted_shard)
-                .await
-                .map_err(|e| e.to_string())?;
+        let results = futures::future::join_all(shard_futures).await;
+        let mut chunk_refs = Vec::new();
+        let mut last_target_label = String::new();
 
+        for res in results {
+            let (shard_idx, target_id, uploaded_file_id, shard_sha, shard_len, target_label) = res?;
             chunk_refs.push(ChunkRef {
                 shard_index: shard_idx,
-                target_id: target.target_id.clone(),
+                target_id,
                 file_id: uploaded_file_id,
                 sha256: shard_sha,
             });
+            uploaded_shards_count += 1;
+            transferred_cloud_bytes += shard_len;
+            last_target_label = target_label;
         }
 
         stripes.push(Stripe {
@@ -573,13 +725,33 @@ pub async fn upload_file_package(
             chunks: chunk_refs,
         });
 
-        // Emit progress
+        // Compute speed & ETA
+        let elapsed_secs = start_upload_instant.elapsed().as_secs_f64().max(0.1);
+        let speed_bps = (transferred_cloud_bytes as f64 / elapsed_secs) as u64;
         let transferred = ((s_idx + 1) * chunk_size).min(total_size as usize) as u64;
+        let remaining_bytes = total_size.saturating_sub(transferred);
+        let eta_seconds = if speed_bps > 0 { remaining_bytes / speed_bps.max(1) } else { 0 };
+
         let _ = app.emit("transfer-progress", serde_json::json!({
             "transfer_id": transfer_id,
+            "stage": "uploading_shards",
+            "current_shard": uploaded_shards_count,
+            "total_shards": total_shards,
             "transferred": transferred,
-            "total": total_size
+            "transferred_bytes": transferred,
+            "total": total_size,
+            "total_bytes": total_size,
+            "speed_bps": speed_bps,
+            "eta_seconds": eta_seconds,
+            "target_label": last_target_label,
+            "status": "transferring"
         }));
+
+        if let Ok(Some(mut tx)) = state.db.get_transfer(&transfer_id) {
+            tx.transferred_bytes = transferred;
+            tx.updated_at = chrono::Utc::now().timestamp();
+            let _ = state.db.upsert_transfer(&tx);
+        }
     }
 
     let manifest = PackageManifest {
@@ -602,24 +774,48 @@ pub async fn upload_file_package(
         created_at: chrono::Utc::now().timestamp(),
     };
 
-    // Encrypt and upload metadata manifest to all targets
+    let _ = app.emit("transfer-progress", serde_json::json!({
+        "transfer_id": transfer_id,
+        "stage": "finalizing",
+        "current_shard": total_shards,
+        "total_shards": total_shards,
+        "transferred": total_size,
+        "transferred_bytes": total_size,
+        "total": total_size,
+        "total_bytes": total_size,
+        "speed_bps": 0,
+        "eta_seconds": 0,
+        "status": "finalizing"
+    }));
+
+    // Encrypt and upload metadata manifest to all targets in parallel
     let encrypted_manifest = manifest.encrypt(&key).map_err(|e| e.to_string())?;
     let meta_file_name = format!("meta_{}.enc", package_id);
 
+    let mut manifest_futures = Vec::new();
     for target in &vault.targets {
-        if let Ok(magdrive_dir) = client.ensure_folder(&target.target_id, ".magdrive").await {
-            if let Ok(meta_dir) = client.ensure_folder(&magdrive_dir, "metadata").await {
-                let _ = client.upload_file(&meta_dir, &meta_file_name, &encrypted_manifest).await;
+        let client_clone = client.clone();
+        let target_id = target.target_id.clone();
+        let m_name = meta_file_name.clone();
+        let m_bytes = encrypted_manifest.clone();
+        let cache = state.folder_cache.clone();
+
+        manifest_futures.push(async move {
+            if let Ok(magdrive_dir) = ensure_cached_folder(&client_clone, &cache, &target_id, ".magdrive").await {
+                if let Ok(meta_dir) = ensure_cached_folder(&client_clone, &cache, &magdrive_dir, "metadata").await {
+                    let _ = client_clone.upload_file(&meta_dir, &m_name, &m_bytes).await;
+                }
             }
-        }
+        });
     }
+    futures::future::join_all(manifest_futures).await;
 
     // Save to local SQLite
     state.db.upsert_package(&vault_id, &manifest).map_err(|e| e.to_string())?;
 
     // Mark transfer as completed
     let _ = state.db.upsert_transfer(&TransferRecord {
-        id: transfer_id,
+        id: transfer_id.clone(),
         package_id: package_id.clone(),
         name: file_name,
         transfer_type: "upload".to_string(),
@@ -629,6 +825,20 @@ pub async fn upload_file_package(
         error_message: None,
         updated_at: chrono::Utc::now().timestamp(),
     });
+
+    let _ = app.emit("transfer-progress", serde_json::json!({
+        "transfer_id": transfer_id,
+        "stage": "completed",
+        "current_shard": total_shards,
+        "total_shards": total_shards,
+        "transferred": total_size,
+        "transferred_bytes": total_size,
+        "total": total_size,
+        "total_bytes": total_size,
+        "speed_bps": 0,
+        "eta_seconds": 0,
+        "status": "completed"
+    }));
 
     Ok(package_id)
 }
@@ -658,7 +868,7 @@ pub async fn download_package(
 
     let pass = passphrase.unwrap_or_else(|| "magdrive".to_string());
     let salt = hex::decode(&vault.salt_hex).map_err(|e| e.to_string())?;
-    let key = derive_master_key(&pass, &salt).map_err(|e| e.to_string())?;
+    let key = get_or_derive_master_key(&state.key_cache, &vault.id, &pass, &salt)?;
 
     let client = get_drive_client(&state.db).await?;
 
@@ -668,20 +878,25 @@ pub async fn download_package(
         let total_shards = pkg.erasure_schema.data_shards + pkg.erasure_schema.parity_shards;
         let mut available_shards: Vec<Option<Vec<u8>>> = vec![None; total_shards];
 
-        // Download available chunks with auto-recovery
+        // Download available chunks with auto-recovery concurrently
+        let mut chunk_futures = Vec::new();
         for chunk in &stripe.chunks {
             if chunk.shard_index < total_shards {
-                match client.download_file(&chunk.file_id).await {
-                    Ok(encrypted_bytes) => {
-                        // Decrypt chunk
-                        if let Ok(decrypted_shard) = decrypt_chunk(&encrypted_bytes, &key) {
-                            available_shards[chunk.shard_index] = Some(decrypted_shard);
-                        }
-                    }
-                    Err(_) => {
-                        // Chunk missing or drive dead - failover to parity
-                        continue;
-                    }
+                let client_clone = client.clone();
+                let file_id = chunk.file_id.clone();
+                let shard_idx = chunk.shard_index;
+                chunk_futures.push(async move {
+                    let res = client_clone.download_file(&file_id).await;
+                    (shard_idx, res)
+                });
+            }
+        }
+
+        let download_results = futures::future::join_all(chunk_futures).await;
+        for (shard_idx, res) in download_results {
+            if let Ok(encrypted_bytes) = res {
+                if let Ok(decrypted_shard) = decrypt_chunk(&encrypted_bytes, &key) {
+                    available_shards[shard_idx] = Some(decrypted_shard);
                 }
             }
         }
@@ -706,8 +921,13 @@ pub async fn download_package(
 
         let _ = app.emit("transfer-progress", serde_json::json!({
             "package_id": package_id,
+            "transfer_id": package_id,
+            "stage": "downloading",
             "transferred": assembled_bytes.len(),
-            "total": pkg.total_size
+            "transferred_bytes": assembled_bytes.len(),
+            "total": pkg.total_size,
+            "total_bytes": pkg.total_size,
+            "status": "transferring"
         }));
     }
 
@@ -911,7 +1131,7 @@ pub async fn finish_upload_session(
 
     let pass = session.passphrase.unwrap_or_else(|| "magdrive".to_string());
     let salt = hex::decode(&vault.salt_hex).map_err(|e| e.to_string())?;
-    let key = derive_master_key(&pass, &salt).map_err(|e| e.to_string())?;
+    let key = get_or_derive_master_key(&state.key_cache, &vault.id, &pass, &salt)?;
 
     let uploader_pubkey = state.keypair.lock().unwrap().public_key_hex();
 
@@ -929,38 +1149,53 @@ pub async fn finish_upload_session(
     let chunk_size = session.chunk_size;
     let mut stripes = Vec::new();
     let num_stripes = (raw_bytes.len() + chunk_size - 1) / chunk_size.max(1);
+    let total_shards = num_stripes * (data_shards + parity_shards);
+
+    let _ = app.emit("transfer-progress", serde_json::json!({
+        "transfer_id": session.transfer_id,
+        "stage": "encrypting",
+        "current_shard": 0,
+        "total_shards": total_shards,
+        "transferred": 0,
+        "transferred_bytes": 0,
+        "total": total_size,
+        "total_bytes": total_size,
+        "speed_bps": 0,
+        "eta_seconds": 0,
+        "status": "transferring"
+    }));
+
+    // Pre-resolve and cache chunks folders for all targets concurrently
+    let mut chunks_dir_futures = Vec::new();
+    for target in &vault.targets {
+        let client_clone = client.clone();
+        let target_id = target.target_id.clone();
+        let cache = state.folder_cache.clone();
+        chunks_dir_futures.push(async move {
+            let magdrive_dir = ensure_cached_folder(&client_clone, &cache, &target_id, ".magdrive").await?;
+            let chunks_dir = ensure_cached_folder(&client_clone, &cache, &magdrive_dir, "chunks").await?;
+            Ok::<String, String>(chunks_dir)
+        });
+    }
+    let target_chunks_dirs = futures::future::join_all(chunks_dir_futures).await;
+    let mut resolved_chunks_dirs = Vec::new();
+    for (idx, res) in target_chunks_dirs.into_iter().enumerate() {
+        match res {
+            Ok(dir) => resolved_chunks_dirs.push(dir),
+            Err(e) => return Err(format!("Failed to initialize folder for target {}: {}", vault.targets[idx].label, e)),
+        }
+    }
+
+    let mut uploaded_shards_count: usize = 0;
+    let mut transferred_cloud_bytes: u64 = 0;
+    let start_upload_instant = std::time::Instant::now();
 
     for s_idx in 0..num_stripes {
-        let start = s_idx * chunk_size;
-        let end = (start + chunk_size).min(raw_bytes.len());
-        let stripe_data = &raw_bytes[start..end];
-
-        let (shards, _) = encode(stripe_data, data_shards, parity_shards)
-            .map_err(|e| e.to_string())?;
-
-        let mut chunk_refs = Vec::new();
-
-        for (shard_idx, shard) in shards.iter().enumerate() {
-            let encrypted_shard = encrypt_chunk(shard, &key).map_err(|e| e.to_string())?;
-            let shard_sha = compute_sha256(&encrypted_shard);
-            let chunk_file_name = format!("chunk_{}_{}.bin", package_id, shard_sha);
-
-            let target_idx = shard_idx % vault.targets.len();
-            let target = &vault.targets[target_idx];
-
-            let chunks_dir = client
-                .ensure_folder(&target.target_id, ".magdrive")
-                .await
-                .map_err(|e| e.to_string())?;
-            let chunks_sub = client
-                .ensure_folder(&chunks_dir, "chunks")
-                .await
-                .map_err(|e| e.to_string())?;
-
-            let uploaded_file_id = match client.upload_file(&chunks_sub, &chunk_file_name, &encrypted_shard).await {
-                Ok(fid) => fid,
-                Err(e) => {
-                    // On upload error, delete any previously uploaded chunk files on the drive!
+        // Check pause or cancel
+        {
+            let sessions = state.upload_sessions.lock().unwrap();
+            if let Some(s) = sessions.get(&session_id) {
+                if s.is_cancelled {
                     let client_clone = client.clone();
                     let cleanup_ids = uploaded_cloud_ids.clone();
                     tokio::spawn(async move {
@@ -968,25 +1203,105 @@ pub async fn finish_upload_session(
                             let _ = client_clone.delete_file(&fid).await;
                         }
                     });
-                    let _ = state.db.update_transfer_status(&session.transfer_id, "failed", Some(&e.to_string()));
+                    let _ = state.db.update_transfer_status(&session.transfer_id, "cancelled", None);
+                    return Err("Transfer cancelled by user.".into());
+                }
+            }
+        }
+
+        let start = s_idx * chunk_size;
+        let end = (start + chunk_size).min(raw_bytes.len());
+        let stripe_data = &raw_bytes[start..end];
+
+        let (shards, _) = encode(stripe_data, data_shards, parity_shards)
+            .map_err(|e| e.to_string())?;
+
+        let mut shard_futures = Vec::new();
+
+        for (shard_idx, shard) in shards.iter().enumerate() {
+            let encrypted_shard = encrypt_chunk(shard, &key).map_err(|e| e.to_string())?;
+            let shard_sha = compute_sha256(&encrypted_shard);
+            let chunk_file_name = format!("chunk_{}_{}.bin", package_id, shard_sha);
+
+            let target_idx = shard_idx % vault.targets.len();
+            let target = vault.targets[target_idx].clone();
+            let chunks_sub = resolved_chunks_dirs[target_idx].clone();
+            let client_clone = client.clone();
+            let shard_len = encrypted_shard.len() as u64;
+
+            shard_futures.push(async move {
+                let fid = client_clone
+                    .upload_file(&chunks_sub, &chunk_file_name, &encrypted_shard)
+                    .await
+                    .map_err(|e| e.to_string())?;
+                Ok::<_, String>((shard_idx, target.target_id, fid, shard_sha, shard_len, target.label))
+            });
+        }
+
+        let results = futures::future::join_all(shard_futures).await;
+        let mut chunk_refs = Vec::new();
+        let mut last_target_label = String::new();
+
+        for res in results {
+            match res {
+                Ok((shard_idx, target_id, uploaded_file_id, shard_sha, shard_len, target_label)) => {
+                    uploaded_cloud_ids.push(uploaded_file_id.clone());
+                    chunk_refs.push(ChunkRef {
+                        shard_index: shard_idx,
+                        target_id,
+                        file_id: uploaded_file_id,
+                        sha256: shard_sha,
+                    });
+                    uploaded_shards_count += 1;
+                    transferred_cloud_bytes += shard_len;
+                    last_target_label = target_label;
+                }
+                Err(e) => {
+                    let client_clone = client.clone();
+                    let cleanup_ids = uploaded_cloud_ids.clone();
+                    tokio::spawn(async move {
+                        for fid in cleanup_ids {
+                            let _ = client_clone.delete_file(&fid).await;
+                        }
+                    });
+                    let _ = state.db.update_transfer_status(&session.transfer_id, "failed", Some(&e));
                     return Err(format!("Cloud chunk upload failed: {}", e));
                 }
-            };
-
-            uploaded_cloud_ids.push(uploaded_file_id.clone());
-
-            chunk_refs.push(ChunkRef {
-                shard_index: shard_idx,
-                target_id: target.target_id.clone(),
-                file_id: uploaded_file_id,
-                sha256: shard_sha,
-            });
+            }
         }
 
         stripes.push(Stripe {
             stripe_index: s_idx,
             chunks: chunk_refs,
         });
+
+        // Compute speed & ETA
+        let elapsed_secs = start_upload_instant.elapsed().as_secs_f64().max(0.1);
+        let speed_bps = (transferred_cloud_bytes as f64 / elapsed_secs) as u64;
+        let transferred = ((s_idx + 1) * chunk_size).min(total_size as usize) as u64;
+        let remaining_bytes = total_size.saturating_sub(transferred);
+        let eta_seconds = if speed_bps > 0 { remaining_bytes / speed_bps.max(1) } else { 0 };
+
+        let _ = app.emit("transfer-progress", serde_json::json!({
+            "transfer_id": session.transfer_id,
+            "stage": "uploading_shards",
+            "current_shard": uploaded_shards_count,
+            "total_shards": total_shards,
+            "transferred": transferred,
+            "transferred_bytes": transferred,
+            "total": total_size,
+            "total_bytes": total_size,
+            "speed_bps": speed_bps,
+            "eta_seconds": eta_seconds,
+            "target_label": last_target_label,
+            "status": "transferring"
+        }));
+
+        if let Ok(Some(mut tx)) = state.db.get_transfer(&session.transfer_id) {
+            tx.transferred_bytes = transferred;
+            tx.updated_at = chrono::Utc::now().timestamp();
+            let _ = state.db.upsert_transfer(&tx);
+        }
     }
 
     let manifest = PackageManifest {
@@ -1009,16 +1324,41 @@ pub async fn finish_upload_session(
         created_at: chrono::Utc::now().timestamp(),
     };
 
+    let _ = app.emit("transfer-progress", serde_json::json!({
+        "transfer_id": session.transfer_id,
+        "stage": "finalizing",
+        "current_shard": total_shards,
+        "total_shards": total_shards,
+        "transferred": total_size,
+        "transferred_bytes": total_size,
+        "total": total_size,
+        "total_bytes": total_size,
+        "speed_bps": 0,
+        "eta_seconds": 0,
+        "status": "finalizing"
+    }));
+
+    // Encrypt and upload metadata manifest to all targets in parallel
     let manifest_bytes = manifest.encrypt(&key).map_err(|e| e.to_string())?;
     let manifest_file_name = format!("meta_{}.enc", package_id);
 
+    let mut manifest_futures = Vec::new();
     for target in &vault.targets {
-        if let Ok(magdrive_dir) = client.ensure_folder(&target.target_id, ".magdrive").await {
-            if let Ok(meta_dir) = client.ensure_folder(&magdrive_dir, "metadata").await {
-                let _ = client.upload_file(&meta_dir, &manifest_file_name, &manifest_bytes).await;
+        let client_clone = client.clone();
+        let target_id = target.target_id.clone();
+        let m_name = manifest_file_name.clone();
+        let m_bytes = manifest_bytes.clone();
+        let cache = state.folder_cache.clone();
+
+        manifest_futures.push(async move {
+            if let Ok(magdrive_dir) = ensure_cached_folder(&client_clone, &cache, &target_id, ".magdrive").await {
+                if let Ok(meta_dir) = ensure_cached_folder(&client_clone, &cache, &magdrive_dir, "metadata").await {
+                    let _ = client_clone.upload_file(&meta_dir, &m_name, &m_bytes).await;
+                }
             }
-        }
+        });
     }
+    futures::future::join_all(manifest_futures).await;
 
     state.db.upsert_package(&vault.id, &manifest).map_err(|e| e.to_string())?;
 
@@ -1032,8 +1372,16 @@ pub async fn finish_upload_session(
 
     let _ = app.emit("transfer-progress", serde_json::json!({
         "transfer_id": session.transfer_id,
+        "stage": "completed",
+        "current_shard": total_shards,
+        "total_shards": total_shards,
         "transferred": total_size,
-        "total": total_size
+        "transferred_bytes": total_size,
+        "total": total_size,
+        "total_bytes": total_size,
+        "speed_bps": 0,
+        "eta_seconds": 0,
+        "status": "completed"
     }));
 
     Ok(package_id)

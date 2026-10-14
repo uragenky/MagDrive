@@ -1,4 +1,5 @@
 import { invoke } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
 import {
   DrivePermissionItem,
   GcpCredentials,
@@ -9,6 +10,7 @@ import {
   VaultTarget,
   FileEntry,
   UploadSessionInfo,
+  TransferProgressPayload,
 } from '../types';
 
 export const api = {
@@ -83,7 +85,7 @@ export const api = {
   uploadFileStream: async (
     file: File,
     passphrase: string | undefined,
-    onProgress?: (percent: number, currentChunk: number, totalChunks: number) => void
+    onProgress?: (progress: TransferProgressPayload) => void
   ): Promise<string> => {
     // Adaptive chunk size:
     // < 100 MB -> 16 MB
@@ -104,37 +106,67 @@ export const api = {
       passphrase
     );
 
-    let offset = 0;
-    let chunkIndex = 0;
-
-    while (offset < file.size) {
-      const end = Math.min(offset + chunkSize, file.size);
-      const slice = file.slice(offset, end);
-      const buffer = await slice.arrayBuffer();
-
-      let binary = '';
-      const bytes = new Uint8Array(buffer);
-      const len = bytes.byteLength;
-      for (let i = 0; i < len; i += 8192) {
-        binary += String.fromCharCode.apply(
-          null,
-          bytes.subarray(i, Math.min(i + 8192, len)) as any
-        );
-      }
-      const b64Part = btoa(binary);
-
-      await api.uploadChunkPart(session.session_id, chunkIndex, b64Part);
-
-      offset = end;
-      chunkIndex++;
-
-      if (onProgress) {
-        const pct = Math.min(100, Math.round((offset / file.size) * 100));
-        onProgress(pct, chunkIndex, session.total_chunks);
-      }
+    let unlisten: (() => void) | undefined;
+    if (onProgress) {
+      unlisten = await listen<TransferProgressPayload>('transfer-progress', (event) => {
+        if (event.payload.transfer_id === session.transfer_id) {
+          onProgress(event.payload);
+        }
+      });
     }
 
-    return await api.finishUploadSession(session.session_id);
+    try {
+      let offset = 0;
+      let chunkIndex = 0;
+      const startTime = Date.now();
+
+      while (offset < file.size) {
+        const end = Math.min(offset + chunkSize, file.size);
+        const slice = file.slice(offset, end);
+        const buffer = await slice.arrayBuffer();
+
+        let binary = '';
+        const bytes = new Uint8Array(buffer);
+        const len = bytes.byteLength;
+        for (let i = 0; i < len; i += 8192) {
+          binary += String.fromCharCode.apply(
+            null,
+            bytes.subarray(i, Math.min(i + 8192, len)) as any
+          );
+        }
+        const b64Part = btoa(binary);
+
+        await api.uploadChunkPart(session.session_id, chunkIndex, b64Part);
+
+        offset = end;
+        chunkIndex++;
+
+        if (onProgress) {
+          const elapsedSecs = Math.max(0.1, (Date.now() - startTime) / 1000);
+          const speedBps = Math.round(offset / elapsedSecs);
+          const eta = speedBps > 0 ? Math.round((file.size - offset) / speedBps) : 0;
+          onProgress({
+            transfer_id: session.transfer_id,
+            stage: 'slicing',
+            current_shard: chunkIndex,
+            total_shards: session.total_chunks,
+            transferred: offset,
+            transferred_bytes: offset,
+            total: file.size,
+            total_bytes: file.size,
+            speed_bps: speedBps,
+            eta_seconds: eta,
+            status: 'transferring',
+          });
+        }
+      }
+
+      return await api.finishUploadSession(session.session_id);
+    } finally {
+      if (unlisten) {
+        unlisten();
+      }
+    }
   },
 
   uploadFilePackage: (

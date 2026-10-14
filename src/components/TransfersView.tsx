@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   ArrowUpDown,
   UploadCloud,
@@ -11,7 +11,8 @@ import {
   XCircle,
   Trash2,
 } from 'lucide-react';
-import { TransferRecord } from '../types';
+import { listen } from '@tauri-apps/api/event';
+import { TransferRecord, TransferProgressPayload } from '../types';
 
 interface TransfersViewProps {
   transfers: TransferRecord[];
@@ -30,12 +31,70 @@ export const TransfersView: React.FC<TransfersViewProps> = ({
   onDelete,
   onClearFinished,
 }) => {
+  const [liveStats, setLiveStats] = useState<
+    Record<
+      string,
+      {
+        speed_bps: number;
+        eta_seconds: number;
+        stage: string;
+        current_shard: number;
+        total_shards: number;
+        transferred_bytes: number;
+        target_label?: string;
+      }
+    >
+  >({});
+
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    listen<TransferProgressPayload>('transfer-progress', (event) => {
+      const p = event.payload;
+      if (p.transfer_id) {
+        setLiveStats((prev) => ({
+          ...prev,
+          [p.transfer_id]: {
+            speed_bps: p.speed_bps || 0,
+            eta_seconds: p.eta_seconds || 0,
+            stage: p.stage,
+            current_shard: p.current_shard,
+            total_shards: p.total_shards,
+            transferred_bytes: p.transferred_bytes || p.transferred,
+            target_label: p.target_label,
+          },
+        }));
+      }
+    }).then((fn) => {
+      unlisten = fn;
+    });
+
+    return () => {
+      if (unlisten) unlisten();
+    };
+  }, []);
+
   const formatSize = (bytes: number) => {
     if (bytes === 0) return '0 B';
     const k = 1024;
     const sizes = ['B', 'KB', 'MB', 'GB'];
     const i = Math.floor(Math.log(bytes) / Math.log(k));
     return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+  };
+
+  const formatSpeed = (bps: number) => {
+    if (bps <= 0) return '0 B/s';
+    const k = 1024;
+    const sizes = ['B/s', 'KB/s', 'MB/s', 'GB/s'];
+    const i = Math.floor(Math.log(bps) / Math.log(k));
+    return parseFloat((bps / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+  };
+
+  const formatEta = (secs: number) => {
+    if (secs <= 0) return '0s';
+    if (secs < 60) return `${secs}s`;
+    const mins = Math.floor(secs / 60);
+    const rem = secs % 60;
+    return `${mins}m ${rem}s`;
   };
 
   const getStatusBadge = (status: string) => {
@@ -126,9 +185,15 @@ export const TransfersView: React.FC<TransfersViewProps> = ({
           <div className="space-y-3">
             {transfers.map((tx) => {
               const isUpload = tx.transfer_type === 'upload';
+              const stats = liveStats[tx.id];
+              const effectiveTransferred =
+                stats && (tx.status.toLowerCase() === 'transferring' || tx.status.toLowerCase() === 'paused')
+                  ? stats.transferred_bytes
+                  : tx.transferred_bytes;
+
               const percent =
                 tx.total_bytes > 0
-                  ? Math.min(100, Math.round((tx.transferred_bytes / tx.total_bytes) * 100))
+                  ? Math.min(100, Math.round((effectiveTransferred / tx.total_bytes) * 100))
                   : 0;
 
               const status = tx.status.toLowerCase();
@@ -167,7 +232,7 @@ export const TransfersView: React.FC<TransfersViewProps> = ({
                     <div className="flex items-center space-x-3">
                       <div className="text-right font-mono text-xs">
                         <span className="text-slate-300 font-semibold">
-                          {formatSize(tx.transferred_bytes)}
+                          {formatSize(effectiveTransferred)}
                         </span>
                         <span className="text-slate-500"> / {formatSize(tx.total_bytes)}</span>
                       </div>
@@ -217,6 +282,41 @@ export const TransfersView: React.FC<TransfersViewProps> = ({
                       </div>
                     </div>
                   </div>
+
+                  {/* Real-time stats strip */}
+                  {isTransferring && stats && (
+                    <div className="flex items-center justify-between text-[11px] font-mono text-slate-400 px-0.5">
+                      <div className="flex items-center space-x-2">
+                        {stats.stage && (
+                          <span className="capitalize text-cyan-400 font-semibold">
+                            {stats.stage.replace('_', ' ')}
+                          </span>
+                        )}
+                        {stats.total_shards > 0 && (
+                          <span>
+                            • Shard {stats.current_shard}/{stats.total_shards}
+                          </span>
+                        )}
+                        {stats.target_label && (
+                          <span className="text-slate-500">
+                            ({stats.target_label})
+                          </span>
+                        )}
+                      </div>
+                      <div className="flex items-center space-x-3">
+                        {stats.speed_bps > 0 && (
+                          <span className="text-cyan-400 font-semibold">
+                            ⚡ {formatSpeed(stats.speed_bps)}
+                          </span>
+                        )}
+                        {stats.eta_seconds > 0 && (
+                          <span className="text-slate-400">
+                            ⏱ ETA: {formatEta(stats.eta_seconds)}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  )}
 
                   {/* Progress bar */}
                   <div className="w-full bg-slate-900 rounded-full h-1.5 overflow-hidden">

@@ -44,7 +44,10 @@ Files uploaded through MagDrive are:
 - **Multi-Target Storage Abstraction**: Works transparently with Google Workspace Shared Drives (`supportsAllDrives=true`) or regular Shared Folders on `@gmail.com` personal accounts.
 - **Integrated Google Permissions RBAC**: Group administrators can invite or revoke member emails from the Shared Drive directly within the app via the Google Drive Permissions API.
 - **Local SQLite Cache**: File lists, metadata, and transfer queues are indexed locally for zero-latency searching and offline catalog browsing.
-- **Adaptive Streaming Upload**: Files are sliced in memory-safe adaptive blocks (16 MB / 32 MB / 64 MB), guaranteeing constant memory consumption (< 50 MB RAM) even for multi-GB files without out-of-memory errors.
+- **Adaptive Streaming Upload & Concurrent Shards**: Files are sliced in memory-safe adaptive blocks (16 MB / 32 MB / 64 MB), guaranteeing constant memory consumption (< 50 MB RAM). Shards within each stripe are uploaded concurrently in parallel (`join_all`) across storage targets.
+- **In-Memory Folder & Key Caching**: Target directory structures (`.magdrive/chunks` and `metadata`) and Argon2id derived master keys are cached in-memory, eliminating up to 16 redundant HTTP queries per transfer and removing repetitive CPU overhead.
+- **Real-Time Transfer Metrics**: Granular multi-stage pipeline indicators (Slicing, Encrypting, Shard Upload, and Finalizing) with real-time transfer speed (`⚡ MB/s`), dynamic ETA (`⏱ ~seconds`), and transferred byte counters.
+- **Transparent OAuth 2.0 Auto-Refresh & 401 Interceptor**: Tokens are tracked by expiry and proactively refreshed before calls; any reactive HTTP 401 response is automatically intercepted to renew credentials on-the-fly without interrupting running operations.
 - **Transfer Queue Lifecycle & Auto-Cleanup**: Full state machine with Pause, Resume, Cancel, and Delete. Cancelling a transfer automatically removes any orphaned chunks uploaded to Google Drive.
 - **Transfer State Machine**: Resumable chunk transfers equipped with a Leaky Bucket Rate Limiter and Exponential Backoff with Jitter against Google API rate limits (HTTP 429).
 - **Multi-Platform Support**: Cross-compiled binaries for Windows (`.msi` / `.exe`), macOS (`.dmg` / `.app`), and Linux (`.deb` / `.AppImage`).

@@ -22,6 +22,8 @@ pub fn run() {
         db,
         keypair: std::sync::Mutex::new(keypair),
         upload_sessions: std::sync::Mutex::new(std::collections::HashMap::new()),
+        folder_cache: std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+        key_cache: std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
     };
 
     tauri::Builder::default()

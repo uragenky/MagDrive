@@ -124,7 +124,15 @@ magdrive/
 - **OAuth 2.0 PKCE**:
   - `start_oauth_flow()` spawns a temporary HTTP server on `127.0.0.1:0`.
   - Directs user to Google OAuth consent screen with `scope=https://www.googleapis.com/auth/drive`.
-  - Captures authorization code via `/callback` and exchanges it for an access token and refresh token.
+  - Captures authorization code via `/callback` and exchanges it for an access token, refresh token, and expiration timestamp.
+- **Proactive & Reactive Token Auto-Refresh**:
+  - `get_drive_client(db)` proactively checks `token_expires_at`. If the token is older than 59 minutes or expired, it automatically exchanges the `refresh_token` for a new `access_token` and updates SQLite.
+  - `DriveClient` includes an internal reactive 401 interceptor: if any API request encounters an unexpected HTTP 401, it calls `try_refresh_token()`, updates credentials, and automatically replays the failed request on-the-fly.
+- **Concurrent Shard Uploads & High-Performance In-Memory Caching**:
+  - Target folder hierarchy (`.magdrive/chunks` and `metadata`) is cached in `AppState.folder_cache`, eliminating up to 16 redundant folder lookup calls per transfer.
+  - Argon2id derived master keys are cached in `AppState.key_cache`, avoiding CPU pauses on subsequent uploads.
+  - Shards within each stripe are uploaded simultaneously to respective targets via `futures::future::join_all`.
+  - Metadata manifests are distributed to all targets in parallel.
 - **Rate-Limiting Protection**:
   - Automatically handles HTTP `429 Too Many Requests` and HTTP `5xx` server errors with an exponential backoff loop with randomized jitter (1s, 2s, 4s, 8s).
 - **Google Permissions API**:
