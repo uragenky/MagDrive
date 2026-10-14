@@ -166,6 +166,19 @@ npm run tauri:build
 ```
 Outputs Apple Silicon / Intel `.dmg` and `.app` bundles under `src-tauri/target/release/bundle/dmg/`.
 
+### 3. Automated Multi-Platform Builds (GitHub Actions)
+
+A preconfigured GitHub Actions workflow (`.github/workflows/release.yml`) automatically builds all OS packages concurrently on GitHub-hosted runners (Windows, Linux, macOS).
+
+To trigger a release build:
+1. Push a version tag:
+   ```bash
+   git tag v0.1.0
+   git push origin v0.1.0
+   ```
+2. Or trigger manually via the **GitHub Actions** tab in your repository (`Workflow dispatch`).
+3. Completed installers (`.msi`, `.exe`, `.deb`, `.AppImage`, `.dmg`) will automatically be published to the GitHub Releases section of your repository.
+
 ---
 
 ## Google Workspace & GCP Setup
