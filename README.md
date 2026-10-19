@@ -40,6 +40,9 @@ Files uploaded through MagDrive are:
 ## Key Features
 
 - **Zero-Knowledge Privacy**: Only users with the vault passphrase can decrypt manifests and file data. Google Drive only sees random binary blobs without file extensions or MIME signatures.
+- **Decentralized Swarm Mirroring**: Converts Google Drive into a BitTorrent-like resilient swarm. Users can replicate shards directly between Google Drives (`files.copy`) server-side within seconds without consuming local internet bandwidth.
+- **Serverless Multi-Tracker Coordination**: Lightweight zero-knowledge blind tracker (built for Vercel + Turso libSQL) maps blind HMAC-SHA256 package topics to active mirror drives without ever exposing file names, contents, or decryption keys.
+- **Multi-Source Failover & Anti-Quota Exceeded**: Automatically searches across multiple Google Drive mirrors. If a primary target hits Google's HTTP 403 download quota, the client immediately falls back to active mirrors.
 - **Auto-Recovery & Self-Healing**: Loss of any single storage target (HTTP 404/403) triggers real-time Galois Field $GF(2^8)$ reconstruction from parity blocks.
 - **Multi-Target Storage Abstraction**: Works transparently with Google Workspace Shared Drives (`supportsAllDrives=true`) or regular Shared Folders on `@gmail.com` personal accounts.
 - **Integrated Google Permissions RBAC**: Group administrators can invite or revoke member emails from the Shared Drive directly within the app via the Google Drive Permissions API.
@@ -115,14 +118,17 @@ Files uploaded through MagDrive are:
 - **Failure Tolerance**: If Drive A is deleted or inaccessible, the client downloads Shard 1 and Shard 2, mathematically recovering Shard 0 instantly in memory without interrupting playback or file saving.
 
 ### Magnet Link Protocol
-MagDrive uses self-describing URIs:
+MagDrive uses self-describing, swarm-aware URIs:
 ```text
-magdrive:?xt=urn:magdrive:<package_id>&vh=<vault_id_hint>&sz=<total_bytes>&dn=<file_name>
+magdrive:?xt=urn:magdrive:<package_id>&vh=<vault_id_hint>&sz=<total_bytes>&dn=<file_name>&k=<aes_key_base64>&src=<origin_folder_id>&tr=<tracker_url>
 ```
 - `xt`: Cryptographic hash identifying the package manifest.
 - `vh`: Vault ID hint to verify the user has the matching group profile.
 - `sz`: Total size of the reconstructed file in bytes.
 - `dn`: URL-encoded display name.
+- `k`: Encrypted master key (Base64 URL-safe) enabling recipient direct decryption without pre-shared passwords.
+- `src`: Origin Google Drive folder ID for bootstrap peer discovery.
+- `tr`: Swarm tracker endpoint URL (can be specified multiple times for multi-tracker redundancy).
 
 ---
 

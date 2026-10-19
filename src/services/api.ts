@@ -13,6 +13,8 @@ import {
   TransferProgressPayload,
   DownloadSettings,
   DownloadResult,
+  SwarmResolveResult,
+  TrackerSettings,
 } from '../types';
 
 // Fast native FileReader blob-to-base64 conversion (avoids large JS string allocations)
@@ -58,11 +60,18 @@ export const api = {
   removeDriveMember: (targetId: string, permissionId: string) =>
     invoke<void>('remove_drive_member', { targetId, permissionId }),
 
-  // Catalog & Magnet
+  // Catalog & Magnet & Swarm
   syncCatalog: (passphrase?: string) => invoke<number>('sync_catalog', { passphrase }),
   listCatalogFiles: () => invoke<PackageManifest[]>('list_catalog_files'),
   parseMagnet: (magnetUri: string) => invoke<MagnetInfo>('parse_magnet', { magnetUri }),
   generateMagnet: (packageId: string) => invoke<string>('generate_magnet', { packageId }),
+  resolveMagnetPackage: (magnetUri: string) =>
+    invoke<SwarmResolveResult>('resolve_magnet_package', { magnetUri }),
+  copyShardsToMyDrive: (packageId: string, optInSeeding: boolean) =>
+    invoke<string>('copy_shards_to_my_drive', { packageId, optInSeeding }),
+  getTrackerSettings: () => invoke<TrackerSettings>('get_tracker_settings'),
+  saveTrackerSettings: (trackers: string[], defaultSeeding: boolean) =>
+    invoke<void>('save_tracker_settings', { trackers, defaultSeeding }),
   deletePackage: (packageId: string) => invoke<void>('delete_package', { packageId }),
 
   // Transfers

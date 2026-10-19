@@ -14,6 +14,7 @@ import {
   FolderDown,
   FolderOpen,
   RotateCcw,
+  Server,
 } from 'lucide-react';
 import { openUrl } from '@tauri-apps/plugin-opener';
 import { listen } from '@tauri-apps/api/event';
@@ -43,6 +44,13 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   const [downloadDir, setDownloadDir] = useState('');
   const [promptSaveLocation, setPromptSaveLocation] = useState(true);
   const [downloadSettingsSaved, setDownloadSettingsSaved] = useState(false);
+
+  // Multi-Tracker and Swarm state
+  const [trackers, setTrackers] = useState<string[]>(['https://magdrive-tracker.vercel.app/api']);
+  const [newTrackerUrl, setNewTrackerUrl] = useState('');
+  const [defaultSeeding, setDefaultSeeding] = useState(false);
+  const [isSavingTracker, setIsSavingTracker] = useState(false);
+  const [trackerSavedNotice, setTrackerSavedNotice] = useState(false);
 
   // Targets state for active vault
   const [targets, setTargets] = useState<VaultTarget[]>([]);
@@ -95,6 +103,14 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
         setDownloadDir(dlSettings.download_dir);
         setPromptSaveLocation(dlSettings.prompt_save_location);
       }
+
+      const trkSettings = await api.getTrackerSettings();
+      if (trkSettings) {
+        if (trkSettings.trackers && trkSettings.trackers.length > 0) {
+          setTrackers(trkSettings.trackers);
+        }
+        setDefaultSeeding(trkSettings.default_seeding);
+      }
     } catch (err: any) {
       console.error(err);
     }
@@ -136,6 +152,32 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
       triggerDownloadSavedNotice();
     } catch (err) {
       console.error('Failed to reset download directory:', err);
+    }
+  };
+
+  const handleAddTracker = () => {
+    const trimmed = newTrackerUrl.trim();
+    if (!trimmed) return;
+    if (!trackers.includes(trimmed)) {
+      setTrackers([...trackers, trimmed]);
+    }
+    setNewTrackerUrl('');
+  };
+
+  const handleRemoveTracker = (index: number) => {
+    setTrackers(trackers.filter((_, i) => i !== index));
+  };
+
+  const handleSaveTrackers = async () => {
+    setIsSavingTracker(true);
+    try {
+      await api.saveTrackerSettings(trackers, defaultSeeding);
+      setTrackerSavedNotice(true);
+      setTimeout(() => setTrackerSavedNotice(false), 2500);
+    } catch (err) {
+      console.error('Failed to save tracker settings:', err);
+    } finally {
+      setIsSavingTracker(false);
     }
   };
 
@@ -488,7 +530,103 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
           </div>
         </div>
 
-        {/* Section 3: Vault Targets */}
+        {/* Section 3: Multi-Tracker & Swarm Mirroring */}
+        <div className="bg-slate-950 border border-slate-800 rounded-2xl p-6 space-y-5">
+          <div className="flex items-center justify-between border-b border-slate-800/80 pb-3">
+            <div className="flex items-center space-x-2">
+              <Server className="w-5 h-5 text-indigo-400" />
+              <div>
+                <h3 className="text-sm font-bold text-slate-100">Multi-Tracker & Swarm Mirroring</h3>
+                <p className="text-[11px] text-slate-500">
+                  Daftar serverless tracker untuk penemuan peer (Google Drive mirror) dan koordinasi swarm.
+                </p>
+              </div>
+            </div>
+            {trackerSavedNotice && (
+              <div className="flex items-center space-x-1 text-xs text-emerald-400">
+                <CheckCircle2 className="w-3.5 h-3.5" />
+                <span>Pengaturan Tracker Tersimpan!</span>
+              </div>
+            )}
+          </div>
+
+          <div className="space-y-3">
+            <label className="text-xs font-semibold text-slate-300 block">
+              Daftar Tracker Aktif:
+            </label>
+            <div className="space-y-2">
+              {trackers.map((tr, idx) => (
+                <div
+                  key={idx}
+                  className="flex items-center justify-between bg-slate-900 border border-slate-800 rounded-lg p-2.5 text-xs"
+                >
+                  <span className="font-mono text-slate-300 truncate max-w-[85%]">{tr}</span>
+                  <button
+                    onClick={() => handleRemoveTracker(idx)}
+                    disabled={trackers.length <= 1}
+                    className="p-1 rounded text-slate-500 hover:text-rose-400 transition-colors disabled:opacity-30"
+                    title={trackers.length <= 1 ? 'Minimal harus ada 1 tracker' : 'Hapus tracker'}
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              ))}
+            </div>
+
+            {/* Tambah Tracker Input */}
+            <div className="flex items-center space-x-2 pt-2">
+              <input
+                type="text"
+                placeholder="https://tracker-anda.vercel.app/api"
+                value={newTrackerUrl}
+                onChange={(e) => setNewTrackerUrl(e.target.value)}
+                className="flex-1 bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 text-xs text-slate-200 placeholder-slate-600 focus:outline-none focus:border-cyan-500 font-mono"
+              />
+              <button
+                onClick={handleAddTracker}
+                disabled={!newTrackerUrl.trim()}
+                className="flex items-center space-x-1.5 px-3 py-2 rounded-lg text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-cyan-400 border border-slate-700 transition-all disabled:opacity-50"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                <span>Tambah Tracker</span>
+              </button>
+            </div>
+
+            {/* Default Opt-in Seeding Toggle */}
+            <div className="pt-3 border-t border-slate-800/60 flex items-start justify-between">
+              <div className="space-y-0.5">
+                <label htmlFor="defaultSeedingCheckbox" className="text-xs font-semibold text-slate-200 cursor-pointer">
+                  Otomatis bantu mirror publik saat menyalin (Default Opt-in Seeding)
+                </label>
+                <p className="text-[11px] text-slate-500">
+                  Saat diaktifkan, setiap file yang Anda salin ke Google Drive Anda akan otomatis disetel sebagai Public Viewer dan didaftarkan ke tracker untuk membantu pengguna lain.
+                </p>
+              </div>
+              <label className="relative inline-flex items-center cursor-pointer ml-4 mt-0.5">
+                <input
+                  id="defaultSeedingCheckbox"
+                  type="checkbox"
+                  checked={defaultSeeding}
+                  onChange={(e) => setDefaultSeeding(e.target.checked)}
+                  className="sr-only peer"
+                />
+                <div className="w-9 h-5 bg-slate-800 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-indigo-600"></div>
+              </label>
+            </div>
+
+            <div className="flex justify-end pt-2">
+              <button
+                onClick={handleSaveTrackers}
+                disabled={isSavingTracker}
+                className="px-5 py-2 rounded-lg text-xs font-semibold bg-indigo-600 hover:bg-indigo-500 text-white transition-all shadow-md shadow-indigo-600/30 disabled:opacity-50"
+              >
+                {isSavingTracker ? 'Menyimpan...' : 'Simpan Pengaturan Tracker'}
+              </button>
+            </div>
+          </div>
+        </div>
+
+        {/* Section 4: Vault Targets */}
         {activeVault && (
           <div className="bg-slate-950 border border-slate-800 rounded-2xl p-6 space-y-6">
             <div className="flex items-center justify-between border-b border-slate-800/80 pb-3">

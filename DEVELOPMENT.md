@@ -179,6 +179,24 @@ magdrive/
 
 ---
 
+### 2.7 Decentralized Swarm Mirroring & Blind Tracker Engine (`src-tauri/src/tracker/` & `tracker-serverless/`)
+
+- **Server-Side Shard Copy (`files.copy`)**:
+  - Replicates all chunk shards and manifests directly between Google Drives server-side in seconds (`client.copy_file`), avoiding local internet download and bypassing Google Drive's public download quota limits.
+- **Blind Topic Hashing**:
+  - Packages are mapped on trackers via zero-knowledge HMAC-SHA256:
+    $$\text{Blind Topic} = \text{HMAC-SHA256}(\text{package\_id}, \text{"magdrive-tracker-v1"})$$
+  - The tracker only records the blind topic hash and folder ID, having zero knowledge of file names, contents, or decryption keys.
+- **Serverless Tracker (Vercel + Turso)**:
+  - Ready-to-deploy template located under `tracker-serverless/` with endpoints:
+    - `POST /api/announce`: Registers an active origin or mirror folder ID.
+    - `GET /api/peers?topic=<hash>`: Retrieves active swarm peers with 30s Edge caching.
+    - `POST /api/report-dead`: Automatically demotes and prunes failing mirrors after 3 consecutive failures.
+- **Multi-Source Failover Engine**:
+  - If a primary drive hits Google API download limits (HTTP 403 / 404), the client seamlessly shifts shard requests across alternate active mirror folders.
+
+---
+
 ## 3. Tauri IPC Command Reference
 
 | Command Name | Arguments | Return Type | Description |
@@ -219,6 +237,10 @@ magdrive/
 | `pick_download_directory`| `default_dir: Option<String>` | `Option<String>` | Native directory selection dialog. |
 | `pick_save_file_path` | `default_name: String, default_dir: Option<String>` | `Option<String>` | Native "Save As" file popup dialog with suggested name. |
 | `resolve_download_path` | `download_dir: String, file_name: String` | `String` | Generates collision-safe path for automatic downloads. |
+| `resolve_magnet_package` | `magnet_uri: String` | `SwarmResolveResult` | Resolves magnet URI, queries multi-trackers, and fetches metadata. |
+| `copy_shards_to_my_drive` | `package_id, opt_in_seeding` | `String` | Server-side copies shards to user's Drive and optionally seeds. |
+| `get_tracker_settings` | None | `TrackerSettings` | Retrieves active tracker URLs and default opt-in seeding setting. |
+| `save_tracker_settings` | `trackers, default_seeding` | `()` | Saves tracker endpoints and seeding preferences to SQLite. |
 
 ---
 

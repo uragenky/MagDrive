@@ -437,4 +437,128 @@ impl DriveClient {
             })
         }
     }
+
+    /// Server-side copy of a file directly to a destination folder without downloading to client
+    pub async fn copy_file(
+        &self,
+        file_id: &str,
+        destination_folder_id: &str,
+        new_name: Option<&str>,
+    ) -> Result<DriveFileItem, DriveError> {
+        let url = format!(
+            "https://www.googleapis.com/drive/v3/files/{}/copy?supportsAllDrives=true",
+            file_id
+        );
+
+        let mut payload = serde_json::json!({
+            "parents": [destination_folder_id]
+        });
+
+        if let Some(name) = new_name {
+            payload["name"] = serde_json::json!(name);
+        }
+
+        let mut attempts = 0;
+        let mut delay_ms = 1000u64;
+
+        loop {
+            attempts += 1;
+            let mut headers = self.auth_headers();
+            headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
+
+            let res = self
+                .client
+                .post(&url)
+                .headers(headers)
+                .json(&payload)
+                .send()
+                .await;
+
+            match res {
+                Ok(response) => {
+                    let status = response.status();
+                    if status.is_success() {
+                        let item: DriveFileItem = response.json().await?;
+                        return Ok(item);
+                    } else if status.as_u16() == 401 && attempts <= 2 {
+                        if self.try_refresh_token().await {
+                            continue;
+                        } else {
+                            let msg = response.text().await.unwrap_or_default();
+                            return Err(DriveError::ApiError {
+                                status: 401,
+                                message: msg,
+                            });
+                        }
+                    } else if status.as_u16() == 404 {
+                        return Err(DriveError::NotFound(file_id.to_string()));
+                    } else if status.as_u16() == 429 || status.is_server_error() {
+                        if attempts >= 5 {
+                            return Err(DriveError::RateLimited);
+                        }
+                        tokio::time::sleep(Duration::from_millis(delay_ms)).await;
+                        delay_ms *= 2;
+                    } else {
+                        let msg = response.text().await.unwrap_or_default();
+                        return Err(DriveError::ApiError {
+                            status: status.as_u16(),
+                            message: msg,
+                        });
+                    }
+                }
+                Err(e) => {
+                    if attempts >= 5 {
+                        return Err(DriveError::Network(e));
+                    }
+                    tokio::time::sleep(Duration::from_millis(delay_ms)).await;
+                    delay_ms *= 2;
+                }
+            }
+        }
+    }
+
+    /// Sets a folder's permission to Public Viewer (anyone with link can read)
+    pub async fn set_folder_public_viewer(&self, folder_id: &str) -> Result<(), DriveError> {
+        let url = format!(
+            "https://www.googleapis.com/drive/v3/files/{}/permissions?supportsAllDrives=true",
+            folder_id
+        );
+
+        let payload = serde_json::json!({
+            "role": "reader",
+            "type": "anyone"
+        });
+
+        let mut headers = self.auth_headers();
+        headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
+
+        let mut res = self
+            .client
+            .post(&url)
+            .headers(headers.clone())
+            .json(&payload)
+            .send()
+            .await?;
+
+        if res.status().as_u16() == 401 && self.try_refresh_token().await {
+            res = self
+                .client
+                .post(&url)
+                .headers(self.auth_headers())
+                .json(&payload)
+                .send()
+                .await?;
+        }
+
+        let status = res.status();
+        if status.is_success() {
+            Ok(())
+        } else {
+            let msg = res.text().await.unwrap_or_default();
+            Err(DriveError::ApiError {
+                status: status.as_u16(),
+                message: msg,
+            })
+        }
+    }
 }

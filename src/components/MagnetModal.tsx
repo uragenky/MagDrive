@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
-import { X, Link as LinkIcon, Download, AlertCircle, FileText } from 'lucide-react';
-import { MagnetInfo } from '../types';
+import { X, Link as LinkIcon, Download, AlertCircle, FileText, CloudLightning, Globe, CheckCircle2, Loader2 } from 'lucide-react';
+import { SwarmResolveResult } from '../types';
 import { api } from '../services/api';
 
 interface MagnetModalProps {
@@ -15,7 +15,11 @@ export const MagnetModal: React.FC<MagnetModalProps> = ({
   onDownloadFromMagnet,
 }) => {
   const [magnetUri, setMagnetUri] = useState('');
-  const [parsedInfo, setParsedInfo] = useState<MagnetInfo | null>(null);
+  const [swarmInfo, setSwarmInfo] = useState<SwarmResolveResult | null>(null);
+  const [isResolving, setIsResolving] = useState(false);
+  const [isCopying, setIsCopying] = useState(false);
+  const [optInSeeding, setOptInSeeding] = useState(true);
+  const [copySuccessMsg, setCopySuccessMsg] = useState<string | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
   if (!isOpen) return null;
@@ -24,24 +28,43 @@ export const MagnetModal: React.FC<MagnetModalProps> = ({
     const val = e.target.value;
     setMagnetUri(val);
     setErrorMsg(null);
+    setCopySuccessMsg(null);
 
     if (val.trim().startsWith('magdrive:?') || val.trim().startsWith('magnet:?')) {
+      setIsResolving(true);
       try {
-        const info = await api.parseMagnet(val.trim());
-        setParsedInfo(info);
+        const resolved = await api.resolveMagnetPackage(val.trim());
+        setSwarmInfo(resolved);
       } catch (err: any) {
-        setParsedInfo(null);
-        setErrorMsg('Invalid magnet link format.');
+        setSwarmInfo(null);
+        setErrorMsg(typeof err === 'string' ? err : 'Gagal mengenali tautan magnet.');
+      } finally {
+        setIsResolving(false);
       }
     } else {
-      setParsedInfo(null);
+      setSwarmInfo(null);
     }
   };
 
   const handleStartDownload = () => {
-    if (!parsedInfo) return;
-    onDownloadFromMagnet(parsedInfo.package_id);
+    if (!swarmInfo) return;
+    onDownloadFromMagnet(swarmInfo.package_id);
     onClose();
+  };
+
+  const handleCopyToDrive = async () => {
+    if (!swarmInfo) return;
+    setIsCopying(true);
+    setErrorMsg(null);
+    setCopySuccessMsg(null);
+    try {
+      const msg = await api.copyShardsToMyDrive(swarmInfo.package_id, optInSeeding);
+      setCopySuccessMsg(msg || 'Penyalinan shard ke Google Drive Anda berhasil!');
+    } catch (err: any) {
+      setErrorMsg(typeof err === 'string' ? err : 'Gagal menyalin shard ke Google Drive.');
+    } finally {
+      setIsCopying(false);
+    }
   };
 
   const formatSize = (bytes?: number) => {
@@ -58,7 +81,7 @@ export const MagnetModal: React.FC<MagnetModalProps> = ({
         <div className="flex items-center justify-between p-5 border-b border-slate-800">
           <div className="flex items-center space-x-2">
             <LinkIcon className="w-5 h-5 text-cyan-400" />
-            <h3 className="text-sm font-bold text-slate-100">Open MagDrive Magnet Link</h3>
+            <h3 className="text-sm font-bold text-slate-100">Buka MagDrive Magnet Link</h3>
           </div>
           <button
             onClick={onClose}
@@ -71,16 +94,23 @@ export const MagnetModal: React.FC<MagnetModalProps> = ({
         <div className="p-6 space-y-4 text-xs">
           <div>
             <label className="font-semibold text-slate-300 block mb-1.5">
-              Paste Magnet URI:
+              Tempel Magnet URI:
             </label>
             <textarea
               rows={3}
-              placeholder="magdrive:?xt=urn:magdrive:pkg_...&sz=...&dn=..."
+              placeholder="magdrive:?xt=urn:magdrive:pkg_...&k=...&sz=...&dn=..."
               value={magnetUri}
               onChange={handleUriChange}
               className="w-full bg-slate-900 border border-slate-800 rounded-xl p-3 text-slate-200 font-mono text-[11px] focus:outline-none focus:border-cyan-500 placeholder-slate-600 resize-none"
             />
           </div>
+
+          {isResolving && (
+            <div className="flex items-center space-x-2 text-cyan-400 py-1">
+              <Loader2 className="w-4 h-4 animate-spin" />
+              <span>Menghubungi multi-tracker & mendeteksi mirror swarm...</span>
+            </div>
+          )}
 
           {errorMsg && (
             <div className="p-3 rounded-lg bg-rose-500/10 border border-rose-500/20 text-rose-400 flex items-center space-x-2">
@@ -89,44 +119,85 @@ export const MagnetModal: React.FC<MagnetModalProps> = ({
             </div>
           )}
 
-          {parsedInfo && (
-            <div className="bg-slate-900 border border-slate-800 rounded-xl p-4 space-y-2">
-              <div className="flex items-center space-x-2 text-cyan-400 font-semibold mb-1">
-                <FileText className="w-4 h-4" />
-                <span>Magnet File Preview:</span>
+          {copySuccessMsg && (
+            <div className="p-3 rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 flex items-center space-x-2">
+              <CheckCircle2 className="w-4 h-4 shrink-0" />
+              <span>{copySuccessMsg}</span>
+            </div>
+          )}
+
+          {swarmInfo && (
+            <div className="bg-slate-900 border border-slate-800 rounded-xl p-4 space-y-3">
+              <div className="flex items-center justify-between text-cyan-400 font-semibold">
+                <div className="flex items-center space-x-2">
+                  <FileText className="w-4 h-4" />
+                  <span>Pratinjau File:</span>
+                </div>
+                <div className="flex items-center space-x-1.5 px-2.5 py-0.5 rounded-full text-[11px] bg-cyan-950 text-cyan-300 border border-cyan-800">
+                  <Globe className="w-3 h-3" />
+                  <span>{swarmInfo.peer_count} Mirror Swarm</span>
+                </div>
               </div>
+
               <div className="grid grid-cols-2 gap-2 text-slate-300">
                 <div>
-                  <span className="text-slate-500 block text-[10px]">File Name:</span>
-                  <span className="font-semibold">{parsedInfo.name || '(Unnamed)'}</span>
+                  <span className="text-slate-500 block text-[10px]">Nama File:</span>
+                  <span className="font-semibold text-slate-200 truncate block">{swarmInfo.name || '(Tanpa Nama)'}</span>
                 </div>
                 <div>
-                  <span className="text-slate-500 block text-[10px]">Original Size:</span>
-                  <span className="font-mono">{formatSize(parsedInfo.total_bytes)}</span>
+                  <span className="text-slate-500 block text-[10px]">Ukuran Asli:</span>
+                  <span className="font-mono text-slate-200">{formatSize(swarmInfo.total_size)}</span>
                 </div>
                 <div className="col-span-2">
                   <span className="text-slate-500 block text-[10px]">Package ID:</span>
-                  <span className="font-mono text-[10px] text-slate-400">{parsedInfo.package_id}</span>
+                  <span className="font-mono text-[10px] text-slate-400">{swarmInfo.package_id}</span>
                 </div>
+              </div>
+
+              <div className="pt-2 border-t border-slate-800 flex items-center justify-between">
+                <label className="flex items-center space-x-2 cursor-pointer text-slate-300 select-none">
+                  <input
+                    type="checkbox"
+                    checked={optInSeeding}
+                    onChange={(e) => setOptInSeeding(e.target.checked)}
+                    className="rounded border-slate-700 bg-slate-800 text-cyan-500 focus:ring-0"
+                  />
+                  <span className="text-[11px]">Bantu Seeding (Jadikan folder saya mirror publik setelah disalin)</span>
+                </label>
               </div>
             </div>
           )}
         </div>
 
-        <div className="p-5 border-t border-slate-800 bg-slate-900/40 flex items-center justify-end space-x-3">
+        <div className="p-5 border-t border-slate-800 bg-slate-900/40 flex flex-wrap items-center justify-end gap-2.5">
           <button
             onClick={onClose}
             className="px-4 py-2 rounded-lg text-xs font-semibold text-slate-400 hover:text-slate-200 hover:bg-slate-800 transition-colors"
           >
-            Cancel
+            Tutup
           </button>
+
+          <button
+            onClick={handleCopyToDrive}
+            disabled={!swarmInfo || isCopying}
+            className="flex items-center space-x-1.5 px-4 py-2 rounded-lg text-xs font-bold bg-emerald-600 hover:bg-emerald-500 text-white transition-all shadow-md shadow-emerald-600/30 disabled:opacity-50"
+            title="Salin shard langsung ke Google Drive Anda secara instan (Bypass kuota download)"
+          >
+            {isCopying ? (
+              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+            ) : (
+              <CloudLightning className="w-3.5 h-3.5" />
+            )}
+            <span>Salin ke Drive Saya (Instan)</span>
+          </button>
+
           <button
             onClick={handleStartDownload}
-            disabled={!parsedInfo}
-            className="flex items-center space-x-1.5 px-5 py-2 rounded-lg text-xs font-bold bg-cyan-600 hover:bg-cyan-500 text-white transition-all shadow-md shadow-cyan-600/30 disabled:opacity-50"
+            disabled={!swarmInfo}
+            className="flex items-center space-x-1.5 px-4 py-2 rounded-lg text-xs font-bold bg-cyan-600 hover:bg-cyan-500 text-white transition-all shadow-md shadow-cyan-600/30 disabled:opacity-50"
           >
             <Download className="w-3.5 h-3.5" />
-            <span>Download File</span>
+            <span>Unduh ke Komputer</span>
           </button>
         </div>
       </div>

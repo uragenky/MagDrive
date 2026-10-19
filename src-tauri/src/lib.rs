@@ -5,6 +5,7 @@ pub mod drive;
 pub mod erasure;
 pub mod magnet;
 pub mod storage;
+pub mod tracker;
 pub mod vault;
 
 use tauri::Manager;
@@ -69,6 +70,10 @@ pub fn run() {
             commands::cancel_transfer,
             commands::delete_transfer,
             commands::clear_finished_transfers,
+            commands::resolve_magnet_package,
+            commands::copy_shards_to_my_drive,
+            commands::get_tracker_settings,
+            commands::save_tracker_settings,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

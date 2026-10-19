@@ -19,9 +19,39 @@ use crate::drive::client::DriveClient;
 use crate::drive::oauth::{start_oauth_flow, GcpCredentials};
 use crate::drive::permissions::DrivePermissionItem;
 use crate::erasure::rs::{encode, reconstruct};
-use crate::magnet::parser::{generate_magnet_link, parse_magnet_link, MagnetInfo};
+use crate::magnet::parser::{generate_swarm_magnet_link, parse_magnet_link, MagnetInfo};
 use crate::storage::db::{Database, TransferRecord};
+use crate::tracker::{announce_to_trackers, calculate_blind_topic, fetch_peers_multi};
 use crate::vault::model::{VaultExportPayload, VaultRecord, VaultRole, VaultTarget};
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TrackerSettings {
+    pub trackers: Vec<String>,
+    pub default_seeding: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SwarmResolveResult {
+    pub package_id: String,
+    pub name: String,
+    pub total_size: u64,
+    pub peer_count: usize,
+    pub sources: Vec<String>,
+    pub trackers: Vec<String>,
+    pub is_local: bool,
+    pub key: Option<String>,
+}
+
+pub fn get_tracker_urls_from_db(db: &Database) -> Vec<String> {
+    if let Some(json_str) = db.get_setting("tracker_urls") {
+        if let Ok(urls) = serde_json::from_str::<Vec<String>>(&json_str) {
+            if !urls.is_empty() {
+                return urls;
+            }
+        }
+    }
+    vec!["https://magdrive-tracker.vercel.app/api".to_string()]
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UploadSessionInfo {
@@ -628,8 +658,307 @@ pub async fn generate_magnet(
         .ok_or("File not found.")?;
 
     let vault_id = state.db.get_setting("active_vault_id").unwrap_or_default();
-    let link = generate_magnet_link(&pkg.package_id, &vault_id, pkg.total_size, &pkg.name);
+    let vault = state.db.get_vault(&vault_id).map_err(|e| e.to_string())?;
+
+    let key_b64 = if let Some(ref v) = vault {
+        let lock = state.key_cache.lock().unwrap();
+        lock.get(&v.id).map(|k| base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(k))
+    } else {
+        None
+    };
+
+    let sources: Vec<String> = if let Some(ref v) = vault {
+        v.targets.iter().map(|t| t.target_id.clone()).collect()
+    } else {
+        Vec::new()
+    };
+
+    let trackers = get_tracker_urls_from_db(&state.db);
+
+    let link = generate_swarm_magnet_link(
+        &pkg.package_id,
+        &vault_id,
+        pkg.total_size,
+        &pkg.name,
+        key_b64.as_deref(),
+        &sources,
+        &trackers,
+    );
     Ok(link)
+}
+
+#[tauri::command]
+pub async fn resolve_magnet_package(
+    state: State<'_, AppState>,
+    magnet_uri: String,
+) -> Result<SwarmResolveResult, String> {
+    let info = parse_magnet_link(&magnet_uri).map_err(|e| e.to_string())?;
+
+    // If package is already in local SQLite DB
+    if let Ok(Some(existing_pkg)) = state.db.get_package(&info.package_id) {
+        return Ok(SwarmResolveResult {
+            package_id: existing_pkg.package_id,
+            name: existing_pkg.name,
+            total_size: existing_pkg.total_size,
+            peer_count: info.sources.len().max(1),
+            sources: info.sources,
+            trackers: info.trackers,
+            is_local: true,
+            key: info.key,
+        });
+    }
+
+    let topic = calculate_blind_topic(&info.package_id);
+    let mut tracker_list = info.trackers.clone();
+    if tracker_list.is_empty() {
+        tracker_list = get_tracker_urls_from_db(&state.db);
+    }
+
+    // Fetch peers from all trackers
+    let mut peers = fetch_peers_multi(&tracker_list, &topic).await;
+    for src in &info.sources {
+        if !peers.contains(src) {
+            peers.push(src.clone());
+        }
+    }
+
+    let peer_count = peers.len();
+
+    // If key is provided in magnet, try to download and decrypt manifest from peers
+    if let Some(ref key_str) = info.key {
+        let key_bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .decode(key_str)
+            .or_else(|_| base64::engine::general_purpose::STANDARD.decode(key_str))
+            .map_err(|e| format!("Invalid key in magnet: {}", e))?;
+
+        if key_bytes.len() == 32 {
+            let mut master_key = [0u8; 32];
+            master_key.copy_from_slice(&key_bytes);
+
+            if let Ok(client) = get_drive_client(&state.db).await {
+                let manifest_name = format!("meta_{}.enc", info.package_id);
+                for peer_folder in &peers {
+                    if let Ok(files) = client.list_files_in_folder(peer_folder).await {
+                        for f in files {
+                            if f.name == manifest_name {
+                                if let Ok(enc_data) = client.download_file(&f.id).await {
+                                    if let Ok(manifest) = PackageManifest::decrypt(&enc_data, &master_key) {
+                                        let vault_id = state.db.get_setting("active_vault_id").unwrap_or_else(|| "default_vault".to_string());
+                                        let _ = state.db.upsert_package(&vault_id, &manifest);
+                                        return Ok(SwarmResolveResult {
+                                            package_id: manifest.package_id,
+                                            name: manifest.name,
+                                            total_size: manifest.total_size,
+                                            peer_count,
+                                            sources: peers,
+                                            trackers: tracker_list,
+                                            is_local: false,
+                                            key: info.key,
+                                        });
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(SwarmResolveResult {
+        package_id: info.package_id,
+        name: info.name.unwrap_or_else(|| "Unknown File".to_string()),
+        total_size: info.total_bytes.unwrap_or(0),
+        peer_count,
+        sources: peers,
+        trackers: tracker_list,
+        is_local: false,
+        key: info.key,
+    })
+}
+
+#[tauri::command]
+pub async fn copy_shards_to_my_drive(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    package_id: String,
+    opt_in_seeding: bool,
+) -> Result<String, String> {
+    let pkg = state
+        .db
+        .get_package(&package_id)
+        .map_err(|e| e.to_string())?
+        .ok_or("Package not found in local catalog.")?;
+
+    let vault_id = state
+        .db
+        .get_setting("active_vault_id")
+        .ok_or("No active vault selected.")?;
+    let vault = state
+        .db
+        .get_vault(&vault_id)
+        .map_err(|e| e.to_string())?
+        .ok_or("Active vault not found.")?;
+
+    if vault.targets.is_empty() {
+        return Err("Active vault has no storage targets configured.".into());
+    }
+
+    let client = get_drive_client(&state.db).await?;
+    let target = &vault.targets[0];
+    let magdrive_dir = ensure_cached_folder(&client, &state.folder_cache, &target.target_id, ".magdrive").await?;
+    let chunks_dir = ensure_cached_folder(&client, &state.folder_cache, &magdrive_dir, "chunks").await?;
+
+    let mut chunk_refs = Vec::new();
+    for stripe in &pkg.stripes {
+        for chunk in &stripe.chunks {
+            chunk_refs.push(chunk.clone());
+        }
+    }
+
+    let total_chunks = chunk_refs.len();
+    let transfer_id = format!("cp_{}", Uuid::new_v4().simple());
+    let record = TransferRecord {
+        id: transfer_id.clone(),
+        package_id: package_id.clone(),
+        name: pkg.name.clone(),
+        transfer_type: "copy".to_string(),
+        total_bytes: pkg.total_size,
+        transferred_bytes: 0,
+        status: "transferring".to_string(),
+        error_message: None,
+        destination_path: Some(format!("Google Drive: {}", target.label)),
+        updated_at: chrono::Utc::now().timestamp(),
+    };
+    let _ = state.db.upsert_transfer(&record);
+
+    let _ = app.emit(
+        "transfer-progress",
+        serde_json::json!({
+            "package_id": package_id,
+            "transfer_id": transfer_id,
+            "stage": "copying",
+            "current_shard": 0,
+            "total_shards": total_chunks,
+            "transferred": 0,
+            "transferred_bytes": 0,
+            "total": pkg.total_size,
+            "total_bytes": pkg.total_size,
+            "speed_bps": 0,
+            "eta_seconds": 0,
+            "target_label": format!("Server-side copying to {}", target.label),
+            "status": "transferring"
+        }),
+    );
+
+    let mut copied_count = 0;
+    for (idx, chunk) in chunk_refs.iter().enumerate() {
+        let chunk_file_name = format!("chunk_{}_{}.bin", package_id, chunk.sha256);
+        let copy_res = client
+            .copy_file(&chunk.file_id, &chunks_dir, Some(&chunk_file_name))
+            .await;
+
+        match copy_res {
+            Ok(_) => {
+                copied_count += 1;
+                let transferred = if total_chunks > 0 {
+                    (pkg.total_size * copied_count as u64) / total_chunks as u64
+                } else {
+                    0
+                };
+
+                let _ = app.emit(
+                    "transfer-progress",
+                    serde_json::json!({
+                        "package_id": package_id,
+                        "transfer_id": transfer_id,
+                        "stage": "copying",
+                        "current_shard": copied_count,
+                        "total_shards": total_chunks,
+                        "transferred": transferred,
+                        "transferred_bytes": transferred,
+                        "total": pkg.total_size,
+                        "total_bytes": pkg.total_size,
+                        "speed_bps": 0,
+                        "eta_seconds": 0,
+                        "target_label": format!("Copied shard {}/{} to My Drive...", copied_count, total_chunks),
+                        "status": "transferring"
+                    }),
+                );
+            }
+            Err(e) => {
+                let err_msg = format!("Failed to copy shard {}: {}", idx, e);
+                let _ = state.db.update_transfer_status(&transfer_id, "failed", Some(&err_msg));
+                return Err(err_msg);
+            }
+        }
+    }
+
+    if opt_in_seeding {
+        let _ = client.set_folder_public_viewer(&target.target_id).await;
+        let trackers = get_tracker_urls_from_db(&state.db);
+        let topic = calculate_blind_topic(&package_id);
+        let target_id = target.target_id.clone();
+        tokio::spawn(async move {
+            announce_to_trackers(&trackers, &topic, &target_id, false).await;
+        });
+    }
+
+    let _ = state.db.update_transfer_status(&transfer_id, "completed", None);
+    let _ = app.emit(
+        "transfer-progress",
+        serde_json::json!({
+            "package_id": package_id,
+            "transfer_id": transfer_id,
+            "stage": "completed",
+            "current_shard": total_chunks,
+            "total_shards": total_chunks,
+            "transferred": pkg.total_size,
+            "transferred_bytes": pkg.total_size,
+            "total": pkg.total_size,
+            "total_bytes": pkg.total_size,
+            "speed_bps": 0,
+            "eta_seconds": 0,
+            "status": "completed"
+        }),
+    );
+
+    Ok(format!("Successfully copied all {} shards to {}", total_chunks, target.label))
+}
+
+#[tauri::command]
+pub async fn get_tracker_settings(
+    state: State<'_, AppState>,
+) -> Result<TrackerSettings, String> {
+    let trackers = get_tracker_urls_from_db(&state.db);
+    let default_seeding = state
+        .db
+        .get_setting("opt_in_seeding_default")
+        .map(|v| v == "true" || v == "1")
+        .unwrap_or(false);
+
+    Ok(TrackerSettings {
+        trackers,
+        default_seeding,
+    })
+}
+
+#[tauri::command]
+pub async fn save_tracker_settings(
+    state: State<'_, AppState>,
+    trackers: Vec<String>,
+    default_seeding: bool,
+) -> Result<(), String> {
+    let json_str = serde_json::to_string(&trackers).map_err(|e| e.to_string())?;
+    state
+        .db
+        .set_setting("tracker_urls", &json_str)
+        .map_err(|e| e.to_string())?;
+    state
+        .db
+        .set_setting("opt_in_seeding_default", if default_seeding { "true" } else { "false" })
+        .map_err(|e| e.to_string())?;
+    Ok(())
 }
 
 #[tauri::command]
@@ -1064,6 +1393,18 @@ pub async fn upload_file_package(
     // Save to local SQLite
     state.db.upsert_package(&vault_id, &manifest).map_err(|e| e.to_string())?;
 
+    // Announce to swarm trackers
+    let trackers = get_tracker_urls_from_db(&state.db);
+    let topic = calculate_blind_topic(&package_id);
+    for target in &vault.targets {
+        let t_id = target.target_id.clone();
+        let tr_clone = trackers.clone();
+        let top_clone = topic.clone();
+        tokio::spawn(async move {
+            announce_to_trackers(&tr_clone, &top_clone, &t_id, true).await;
+        });
+    }
+
     // Mark transfer as completed
     let _ = state.db.upsert_transfer(&TransferRecord {
         id: transfer_id.clone(),
@@ -1302,9 +1643,33 @@ pub async fn download_package(
         .map_err(|e| e.to_string())?
         .ok_or("Active vault not found.")?;
 
-    let pass = passphrase.unwrap_or_else(|| "magdrive".to_string());
-    let salt = hex::decode(&vault.salt_hex).map_err(|e| e.to_string())?;
-    let key = get_or_derive_master_key(&state.key_cache, &vault.id, &pass, &salt)?;
+    let key = if let Some(ref p) = passphrase {
+        if let Ok(decoded) = base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(p) {
+            if decoded.len() == 32 {
+                let mut k = [0u8; 32];
+                k.copy_from_slice(&decoded);
+                k
+            } else {
+                let salt = hex::decode(&vault.salt_hex).map_err(|e| e.to_string())?;
+                get_or_derive_master_key(&state.key_cache, &vault.id, p, &salt)?
+            }
+        } else if let Ok(decoded) = base64::engine::general_purpose::STANDARD.decode(p) {
+            if decoded.len() == 32 {
+                let mut k = [0u8; 32];
+                k.copy_from_slice(&decoded);
+                k
+            } else {
+                let salt = hex::decode(&vault.salt_hex).map_err(|e| e.to_string())?;
+                get_or_derive_master_key(&state.key_cache, &vault.id, p, &salt)?
+            }
+        } else {
+            let salt = hex::decode(&vault.salt_hex).map_err(|e| e.to_string())?;
+            get_or_derive_master_key(&state.key_cache, &vault.id, p, &salt)?
+        }
+    } else {
+        let salt = hex::decode(&vault.salt_hex).map_err(|e| e.to_string())?;
+        get_or_derive_master_key(&state.key_cache, &vault.id, "magdrive", &salt)?
+    };
 
     let client = get_drive_client(&state.db).await?;
 
@@ -1903,6 +2268,18 @@ pub async fn finish_upload_session(
     futures::future::join_all(manifest_futures).await;
 
     state.db.upsert_package(&vault.id, &manifest).map_err(|e| e.to_string())?;
+
+    // Announce to swarm trackers
+    let trackers = get_tracker_urls_from_db(&state.db);
+    let topic = calculate_blind_topic(&package_id);
+    for target in &vault.targets {
+        let t_id = target.target_id.clone();
+        let tr_clone = trackers.clone();
+        let top_clone = topic.clone();
+        tokio::spawn(async move {
+            announce_to_trackers(&tr_clone, &top_clone, &t_id, true).await;
+        });
+    }
 
     if let Ok(Some(mut tx)) = state.db.get_transfer(&session.transfer_id) {
         tx.package_id = package_id.clone();

@@ -129,6 +129,25 @@ export interface MagnetInfo {
   vault_hint?: string;
   total_bytes?: number;
   name?: string;
+  key?: string;
+  sources?: string[];
+  trackers?: string[];
+}
+
+export interface SwarmResolveResult {
+  package_id: string;
+  name: string;
+  total_size: number;
+  peer_count: number;
+  sources: string[];
+  trackers: string[];
+  is_local: boolean;
+  key?: string;
+}
+
+export interface TrackerSettings {
+  trackers: string[];
+  default_seeding: boolean;
 }
 
 export interface DownloadSettings {
