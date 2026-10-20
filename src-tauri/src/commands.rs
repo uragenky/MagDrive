@@ -662,7 +662,13 @@ pub async fn generate_magnet(
 
     let key_b64 = if let Some(ref v) = vault {
         let lock = state.key_cache.lock().unwrap();
-        lock.get(&v.id).map(|k| base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(k))
+        // Check direct vault_id match or prefix match (vault_id:sha256)
+        let found_key = lock.get(&v.id).copied().or_else(|| {
+            lock.iter()
+                .find(|(k, _)| k.starts_with(&v.id))
+                .map(|(_, val)| *val)
+        });
+        found_key.map(|k| base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(k))
     } else {
         None
     };
@@ -768,10 +774,10 @@ pub async fn resolve_magnet_package(
             }
 
             for folder_id in &search_folders {
-                // Check both root and .magdrive/metadata/ folder path
+                // Check both root and .magdrive/metadata/ folder path using read-only find_subfolder
                 let mut meta_folder_candidates = vec![folder_id.clone()];
-                if let Ok(magdrive_dir) = ensure_cached_folder(&client, &state.folder_cache, folder_id, ".magdrive").await {
-                    if let Ok(meta_dir) = ensure_cached_folder(&client, &state.folder_cache, &magdrive_dir, "metadata").await {
+                if let Ok(Some(magdrive_dir)) = client.find_subfolder(folder_id, ".magdrive").await {
+                    if let Ok(Some(meta_dir)) = client.find_subfolder(&magdrive_dir, "metadata").await {
                         meta_folder_candidates.push(meta_dir);
                     }
                 }
@@ -864,8 +870,8 @@ pub async fn copy_shards_to_my_drive(
 
                 'search: for folder_id in search_folders {
                     let mut meta_candidates = vec![folder_id.clone()];
-                    if let Ok(magdrive_dir) = ensure_cached_folder(&client, &state.folder_cache, &folder_id, ".magdrive").await {
-                        if let Ok(meta_dir) = ensure_cached_folder(&client, &state.folder_cache, &magdrive_dir, "metadata").await {
+                    if let Ok(Some(magdrive_dir)) = client.find_subfolder(&folder_id, ".magdrive").await {
+                        if let Ok(Some(meta_dir)) = client.find_subfolder(&magdrive_dir, "metadata").await {
                             meta_candidates.push(meta_dir);
                         }
                     }
@@ -1498,6 +1504,11 @@ pub async fn upload_file_package(
 
     // Save to local SQLite
     state.db.upsert_package(&vault_id, &manifest).map_err(|e| e.to_string())?;
+
+    // Set targets public viewer so other accounts can copy/download encrypted shards
+    for target in &vault.targets {
+        let _ = client.set_folder_public_viewer(&target.target_id).await;
+    }
 
     // Announce to swarm trackers
     let trackers = get_tracker_urls_from_db(&state.db);
@@ -2374,6 +2385,11 @@ pub async fn finish_upload_session(
     futures::future::join_all(manifest_futures).await;
 
     state.db.upsert_package(&vault.id, &manifest).map_err(|e| e.to_string())?;
+
+    // Set targets public viewer so other accounts can copy/download encrypted shards
+    for target in &vault.targets {
+        let _ = client.set_folder_public_viewer(&target.target_id).await;
+    }
 
     // Announce to swarm trackers
     let trackers = get_tracker_urls_from_db(&state.db);

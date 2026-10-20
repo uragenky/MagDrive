@@ -139,6 +139,39 @@ impl DriveClient {
         false
     }
 
+    /// Finds a folder with `name` inside `parent_id` without creating it (read-only for peer inspection)
+    pub async fn find_subfolder(&self, parent_id: &str, folder_name: &str) -> Result<Option<String>, DriveError> {
+        let query = format!("'{}' in parents and name = '{}' and mimeType = 'application/vnd.google-apps.folder' and trashed = false", parent_id, folder_name);
+        let list_url = format!(
+            "https://www.googleapis.com/drive/v3/files?q={}&fields=files(id,name)&supportsAllDrives=true&includeItemsFromAllDrives=true",
+            url::form_urlencoded::byte_serialize(query.as_bytes()).collect::<String>()
+        );
+
+        let mut res = self
+            .client
+            .get(&list_url)
+            .headers(self.auth_headers())
+            .send()
+            .await?;
+
+        if res.status().as_u16() == 401 && self.try_refresh_token().await {
+            res = self
+                .client
+                .get(&list_url)
+                .headers(self.auth_headers())
+                .send()
+                .await?;
+        }
+
+        if res.status().is_success() {
+            let list: DriveFileListResponse = res.json().await?;
+            if let Some(first) = list.files.first() {
+                return Ok(Some(first.id.clone()));
+            }
+        }
+        Ok(None)
+    }
+
     /// Finds or creates a folder with `name` inside `parent_id`
     pub async fn ensure_folder(&self, parent_id: &str, folder_name: &str) -> Result<String, DriveError> {
         // First check if folder exists
