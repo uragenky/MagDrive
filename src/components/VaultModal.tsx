@@ -5,8 +5,11 @@ import {
   DownloadCloud,
   AlertCircle,
   FolderLock,
+  FileText,
+  UploadCloud,
 } from 'lucide-react';
 import { VaultTarget } from '../types';
+import { api } from '../services/api';
 
 export type VaultModalMode = 'create' | 'import';
 
@@ -35,7 +38,10 @@ export const VaultModal: React.FC<VaultModalProps> = ({
   ]);
 
   // Import form state
+  const [importSourceType, setImportSourceType] = useState<'token' | 'file'>('file');
   const [importToken, setImportToken] = useState('');
+  const [importJsonContent, setImportJsonContent] = useState('');
+  const [loadedFileName, setLoadedFileName] = useState<string | null>(null);
   const [importPassphrase, setImportPassphrase] = useState('');
 
   const [isLoading, setIsLoading] = useState(false);
@@ -75,17 +81,52 @@ export const VaultModal: React.FC<VaultModalProps> = ({
     }
   };
 
+  const handlePickJsonFile = async () => {
+    try {
+      const content = await api.loadVaultJsonFromFile();
+      if (content) {
+        setImportJsonContent(content);
+        try {
+          const parsed = JSON.parse(content);
+          setLoadedFileName(parsed.vault_name || 'Selected vault.json');
+        } catch {
+          setLoadedFileName('vault.json');
+        }
+        setErrorMsg(null);
+      }
+    } catch (err: any) {
+      setErrorMsg(err?.toString() || 'Gagal membaca file vault.json.');
+    }
+  };
+
   const handleImportSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!importToken.trim() || !importPassphrase.trim()) {
-      setErrorMsg('Token and passphrase are required.');
+    if (!importPassphrase.trim()) {
+      setErrorMsg('Passphrase is required to unlock vault.');
       return;
     }
 
     try {
       setIsLoading(true);
       setErrorMsg(null);
-      await onImportVault(importToken.trim(), importPassphrase.trim());
+
+      if (importSourceType === 'file') {
+        if (!importJsonContent.trim()) {
+          setErrorMsg('Silakan pilih file vault.json terlebih dahulu.');
+          setIsLoading(false);
+          return;
+        }
+        await api.importVaultFromJson(importJsonContent.trim(), importPassphrase.trim());
+        // Reload vaults list by calling onImportVault fallback or closing
+        window.location.reload(); // Quick refresh or state update
+      } else {
+        if (!importToken.trim()) {
+          setErrorMsg('Token string is required.');
+          setIsLoading(false);
+          return;
+        }
+        await onImportVault(importToken.trim(), importPassphrase.trim());
+      }
       onClose();
     } catch (err: any) {
       setErrorMsg(err?.toString() || 'Failed to import vault.');
@@ -256,18 +297,75 @@ export const VaultModal: React.FC<VaultModalProps> = ({
 
           {activeTab === 'import' && (
             <form onSubmit={handleImportSubmit} className="space-y-4">
-              <div>
-                <label className="font-semibold text-slate-400 block mb-1">
-                  Paste Vault Export Token (.magvault):
-                </label>
-                <textarea
-                  rows={4}
-                  placeholder="Paste encrypted base64 vault token string here..."
-                  value={importToken}
-                  onChange={(e) => setImportToken(e.target.value)}
-                  className="w-full bg-slate-900 border border-slate-800 rounded-lg p-3 text-slate-200 font-mono text-xs focus:outline-none focus:border-cyan-500"
-                />
+              <div className="flex border border-slate-800 rounded-lg p-1 bg-slate-900/80 text-xs">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setImportSourceType('file');
+                    setErrorMsg(null);
+                  }}
+                  className={`flex-1 py-1.5 rounded-md font-semibold flex items-center justify-center space-x-1.5 transition-all ${
+                    importSourceType === 'file'
+                      ? 'bg-slate-800 text-cyan-400 border border-slate-700 shadow-sm'
+                      : 'text-slate-400 hover:text-slate-200'
+                  }`}
+                >
+                  <FileText className="w-3.5 h-3.5" />
+                  <span>From vault.json File</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setImportSourceType('token');
+                    setErrorMsg(null);
+                  }}
+                  className={`flex-1 py-1.5 rounded-md font-semibold flex items-center justify-center space-x-1.5 transition-all ${
+                    importSourceType === 'token'
+                      ? 'bg-slate-800 text-cyan-400 border border-slate-700 shadow-sm'
+                      : 'text-slate-400 hover:text-slate-200'
+                  }`}
+                >
+                  <UploadCloud className="w-3.5 h-3.5" />
+                  <span>From Base64 Token</span>
+                </button>
               </div>
+
+              {importSourceType === 'file' ? (
+                <div>
+                  <label className="font-semibold text-slate-400 block mb-1">
+                    Select Backup File (vault.json):
+                  </label>
+                  <div className="flex items-center space-x-2">
+                    <button
+                      type="button"
+                      onClick={handlePickJsonFile}
+                      className="flex-1 py-2.5 px-3 bg-slate-900 hover:bg-slate-800 border border-slate-800 hover:border-slate-700 rounded-lg text-slate-300 text-xs flex items-center justify-center space-x-2 transition-all font-mono"
+                    >
+                      <FileText className="w-4 h-4 text-cyan-400" />
+                      <span>{loadedFileName ? loadedFileName : 'Browse vault.json file...'}</span>
+                    </button>
+                    {importJsonContent && (
+                      <span className="text-[11px] text-emerald-400 font-semibold shrink-0">✓ File loaded</span>
+                    )}
+                  </div>
+                  <p className="text-[10px] text-slate-500 mt-1">
+                    * Pilih file backup yang sebelumnya Anda simpan di harddisk/flashdisk.
+                  </p>
+                </div>
+              ) : (
+                <div>
+                  <label className="font-semibold text-slate-400 block mb-1">
+                    Paste Vault Export Token (.magvault):
+                  </label>
+                  <textarea
+                    rows={4}
+                    placeholder="Paste encrypted base64 vault token string here..."
+                    value={importToken}
+                    onChange={(e) => setImportToken(e.target.value)}
+                    className="w-full bg-slate-900 border border-slate-800 rounded-lg p-3 text-slate-200 font-mono text-xs focus:outline-none focus:border-cyan-500"
+                  />
+                </div>
+              )}
 
               <div>
                 <label className="font-semibold text-slate-400 block mb-1">
@@ -287,7 +385,7 @@ export const VaultModal: React.FC<VaultModalProps> = ({
                 disabled={isLoading}
                 className="w-full py-2.5 rounded-lg font-bold bg-cyan-600 hover:bg-cyan-500 text-white transition-all shadow-md shadow-cyan-600/30 disabled:opacity-50 mt-2"
               >
-                {isLoading ? 'Importing Vault...' : 'Import Vault'}
+                {isLoading ? 'Unlocking Vault...' : 'Unlock & Import Vault'}
               </button>
             </form>
           )}

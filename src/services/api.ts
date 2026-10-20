@@ -51,6 +51,14 @@ export const api = {
     invoke<string>('export_vault_config', { vaultId, role }),
   importVaultConfig: (configB64: string, passphrase: string) =>
     invoke<VaultRecord>('import_vault_config', { configB64, passphrase }),
+  saveVaultJsonToFile: (vaultId: string) =>
+    invoke<string | null>('save_vault_json_to_file', { vaultId }),
+  loadVaultJsonFromFile: () =>
+    invoke<string | null>('load_vault_json_from_file'),
+  importVaultFromJson: (jsonContent: string, passphrase: string) =>
+    invoke<VaultRecord>('import_vault_from_json', { jsonContent, passphrase }),
+  uploadVaultDescriptorToDrive: (vaultId: string) =>
+    invoke<string>('upload_vault_descriptor_to_drive', { vaultId }),
 
   // Permissions (RBAC)
   listDriveMembers: (targetId: string) =>

@@ -16,6 +16,8 @@ import {
   RotateCcw,
   Server,
   Share2,
+  FileText,
+  CloudUpload,
 } from 'lucide-react';
 import { openUrl } from '@tauri-apps/plugin-opener';
 import { listen } from '@tauri-apps/api/event';
@@ -65,6 +67,9 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   const [isExportingToken, setIsExportingToken] = useState(false);
   const [tokenCopied, setTokenCopied] = useState(false);
   const [backupError, setBackupError] = useState<string | null>(null);
+  const [backupSuccess, setBackupSuccess] = useState<string | null>(null);
+  const [isSavingJsonFile, setIsSavingJsonFile] = useState(false);
+  const [isUploadingToCloud, setIsUploadingToCloud] = useState(false);
 
   const jsonFileInputRef = useRef<HTMLInputElement>(null);
 
@@ -192,6 +197,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     if (!activeVault) return;
     setIsExportingToken(true);
     setBackupError(null);
+    setBackupSuccess(null);
     try {
       const token = await api.exportVaultConfig(activeVault.id, 'admin');
       setExportedToken(token);
@@ -199,6 +205,43 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
       setBackupError(typeof err === 'string' ? err : 'Gagal mengekspor token vault backup.');
     } finally {
       setIsExportingToken(false);
+    }
+  };
+
+  const handleSaveJsonBackup = async () => {
+    if (!activeVault) return;
+    setIsSavingJsonFile(true);
+    setBackupError(null);
+    setBackupSuccess(null);
+    try {
+      const savedPath = await api.saveVaultJsonToFile(activeVault.id);
+      if (savedPath) {
+        setBackupSuccess(`File backup berhasil disimpan di: ${savedPath}`);
+      }
+    } catch (err: any) {
+      setBackupError(typeof err === 'string' ? err : 'Gagal menyimpan file backup JSON.');
+    } finally {
+      setIsSavingJsonFile(false);
+    }
+  };
+
+  const handleUploadVaultToDrive = async () => {
+    if (!activeVault) return;
+    const confirmUpload = window.confirm(
+      'File vault.json akan diunggah ke folder .magdrive/ di Google Drive Anda. Siapapun yang memiliki link folder Drive Anda dapat melihat nama vault dan struktur target (namun passphrase dan file Anda tetap aman terenkripsi). Lanjutkan?'
+    );
+    if (!confirmUpload) return;
+
+    setIsUploadingToCloud(true);
+    setBackupError(null);
+    setBackupSuccess(null);
+    try {
+      const msg = await api.uploadVaultDescriptorToDrive(activeVault.id);
+      setBackupSuccess(msg);
+    } catch (err: any) {
+      setBackupError(typeof err === 'string' ? err : 'Gagal mengunggah vault.json ke Google Drive.');
+    } finally {
+      setIsUploadingToCloud(false);
     }
   };
 
@@ -766,19 +809,46 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               </div>
             </div>
 
-            <div className="flex items-center justify-between">
+            <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
               <p className="text-xs text-slate-400 max-w-lg">
-                Token ini memuat target folder ID vault Anda yang terenkripsi dengan passphrase master vault. Token ini aman disimpan sebagai cadangan.
+                Cadangkan konfigurasi vault Anda. Anda dapat menyimpannya sebagai file offline <code className="text-emerald-400">vault.json</code> di komputer, menyalin token teks, atau mengunggahnya ke Google Drive Anda.
               </p>
-              <button
-                onClick={handleExportVaultBackup}
-                disabled={isExportingToken}
-                className="flex items-center space-x-1.5 px-4 py-2 rounded-lg text-xs font-semibold bg-emerald-600 hover:bg-emerald-500 text-white transition-all shadow-md shadow-emerald-600/20 disabled:opacity-50 shrink-0"
-              >
-                <Key className="w-3.5 h-3.5" />
-                <span>{isExportingToken ? 'Generating...' : 'Export Backup Token'}</span>
-              </button>
+              <div className="flex items-center space-x-2 shrink-0">
+                <button
+                  onClick={handleSaveJsonBackup}
+                  disabled={isSavingJsonFile}
+                  className="flex items-center space-x-1.5 px-3 py-2 rounded-lg text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-slate-200 transition-all border border-slate-700 hover:border-slate-600 disabled:opacity-50"
+                  title="Simpan file vault.json ke flashdisk atau folder lokal"
+                >
+                  <FileText className="w-3.5 h-3.5 text-cyan-400" />
+                  <span>{isSavingJsonFile ? 'Saving...' : 'Save vault.json'}</span>
+                </button>
+                <button
+                  onClick={handleExportVaultBackup}
+                  disabled={isExportingToken}
+                  className="flex items-center space-x-1.5 px-3 py-2 rounded-lg text-xs font-semibold bg-emerald-600 hover:bg-emerald-500 text-white transition-all shadow-md shadow-emerald-600/20 disabled:opacity-50"
+                >
+                  <Key className="w-3.5 h-3.5" />
+                  <span>{isExportingToken ? 'Generating...' : 'Export Token'}</span>
+                </button>
+                <button
+                  onClick={handleUploadVaultToDrive}
+                  disabled={isUploadingToCloud}
+                  className="flex items-center space-x-1.5 px-3 py-2 rounded-lg text-xs font-semibold bg-cyan-700/60 hover:bg-cyan-600/60 text-cyan-200 transition-all border border-cyan-500/30 disabled:opacity-50"
+                  title="Unggah vault.json ke folder .magdrive/ di Google Drive Anda (Opsional)"
+                >
+                  <CloudUpload className="w-3.5 h-3.5 text-cyan-300" />
+                  <span>{isUploadingToCloud ? 'Uploading...' : 'Sync to Drive'}</span>
+                </button>
+              </div>
             </div>
+
+            {backupSuccess && (
+              <div className="p-3 rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-xs flex items-center space-x-2">
+                <CheckCircle2 className="w-4 h-4 shrink-0" />
+                <span>{backupSuccess}</span>
+              </div>
+            )}
 
             {backupError && (
               <div className="p-3 rounded-lg bg-rose-500/10 border border-rose-500/20 text-rose-400 text-xs flex items-center space-x-2">

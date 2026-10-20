@@ -558,6 +558,144 @@ pub async fn import_vault_config(
     Ok(record)
 }
 
+#[tauri::command]
+pub async fn save_vault_json_to_file(
+    state: State<'_, AppState>,
+    vault_id: String,
+) -> Result<Option<String>, String> {
+    let vault = state
+        .db
+        .get_vault(&vault_id)
+        .map_err(|e| e.to_string())?
+        .ok_or("Vault not found.")?;
+
+    let payload = VaultExportPayload {
+        version: 1,
+        vault_id: vault.id,
+        vault_name: vault.name.clone(),
+        role: vault.role,
+        targets: vault.targets,
+        salt_hex: vault.salt_hex,
+        verification_tag: vault.verification_tag,
+    };
+
+    let json_string = serde_json::to_string_pretty(&payload).map_err(|e| e.to_string())?;
+    let default_name = format!("{}_vault.json", vault.name.replace(' ', "_"));
+
+    let dialog = rfd::AsyncFileDialog::new()
+        .set_title("Save Vault Backup (vault.json)")
+        .set_file_name(&default_name)
+        .add_filter("JSON Document", &["json"]);
+
+    let file = dialog.save_file().await;
+    if let Some(handle) = file {
+        let path = handle.path().to_path_buf();
+        tokio::fs::write(&path, json_string.as_bytes())
+            .await
+            .map_err(|e| format!("Failed to write vault.json: {}", e))?;
+        Ok(Some(path.to_string_lossy().to_string()))
+    } else {
+        Ok(None)
+    }
+}
+
+#[tauri::command]
+pub async fn load_vault_json_from_file() -> Result<Option<String>, String> {
+    let dialog = rfd::AsyncFileDialog::new()
+        .set_title("Open Vault Backup File (vault.json)")
+        .add_filter("JSON Document", &["json"]);
+
+    let file = dialog.pick_file().await;
+    if let Some(handle) = file {
+        let path = handle.path();
+        let content = tokio::fs::read_to_string(path)
+            .await
+            .map_err(|e| format!("Failed to read file: {}", e))?;
+        Ok(Some(content))
+    } else {
+        Ok(None)
+    }
+}
+
+#[tauri::command]
+pub async fn import_vault_from_json(
+    state: State<'_, AppState>,
+    json_content: String,
+    passphrase: String,
+) -> Result<VaultRecord, String> {
+    let payload: VaultExportPayload = serde_json::from_str(&json_content)
+        .map_err(|e| format!("Invalid vault.json format: {}", e))?;
+
+    // Verify passphrase
+    let salt = hex::decode(&payload.salt_hex).map_err(|e| e.to_string())?;
+    let derived_key = derive_master_key(&passphrase, &salt).map_err(|e| e.to_string())?;
+
+    let tag_bytes = hex::decode(&payload.verification_tag).map_err(|e| e.to_string())?;
+    let decrypted = decrypt_chunk(&tag_bytes, &derived_key);
+    if decrypted.is_err() || decrypted.unwrap() != b"magdrive_valid" {
+        return Err("Incorrect passphrase. Failed to unlock vault.".into());
+    }
+
+    let record = VaultRecord {
+        id: payload.vault_id.clone(),
+        name: payload.vault_name,
+        role: payload.role,
+        salt_hex: payload.salt_hex,
+        targets: payload.targets,
+        verification_tag: payload.verification_tag,
+        created_at: chrono::Utc::now().timestamp(),
+    };
+
+    state.db.save_vault(&record).map_err(|e| e.to_string())?;
+    state
+        .db
+        .set_setting("active_vault_id", &payload.vault_id)
+        .map_err(|e| e.to_string())?;
+
+    Ok(record)
+}
+
+#[tauri::command]
+pub async fn upload_vault_descriptor_to_drive(
+    state: State<'_, AppState>,
+    vault_id: String,
+) -> Result<String, String> {
+    let vault = state
+        .db
+        .get_vault(&vault_id)
+        .map_err(|e| e.to_string())?
+        .ok_or("Vault not found.")?;
+
+    if vault.targets.is_empty() {
+        return Err("No storage targets configured for this vault.".into());
+    }
+
+    let payload = VaultExportPayload {
+        version: 1,
+        vault_id: vault.id,
+        vault_name: vault.name,
+        role: vault.role,
+        targets: vault.targets.clone(),
+        salt_hex: vault.salt_hex,
+        verification_tag: vault.verification_tag,
+    };
+
+    let json_bytes = serde_json::to_vec_pretty(&payload).map_err(|e| e.to_string())?;
+    let client = get_drive_client(&state.db).await?;
+
+    let mut uploaded_targets = Vec::new();
+    for target in &vault.targets {
+        let magdrive_dir = ensure_cached_folder(&client, &state.folder_cache, &target.target_id, ".magdrive").await?;
+        client
+            .upload_file(&magdrive_dir, "vault.json", &json_bytes)
+            .await
+            .map_err(|e| format!("Failed to upload vault.json to target {}: {}", target.label, e))?;
+        uploaded_targets.push(target.label.clone());
+    }
+
+    Ok(format!("Uploaded vault.json to {} target(s): {}", uploaded_targets.len(), uploaded_targets.join(", ")))
+}
+
 // ----------------------------------------------------
 // Google Drive Permissions API (RBAC & Members)
 // ----------------------------------------------------
