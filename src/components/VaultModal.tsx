@@ -1,34 +1,31 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   X,
-  Trash2,
-  Layers,
+  PlusCircle,
+  DownloadCloud,
   AlertCircle,
+  FolderLock,
 } from 'lucide-react';
-import { VaultRecord, VaultTarget } from '../types';
+import { VaultTarget } from '../types';
+
+export type VaultModalMode = 'create' | 'import';
 
 interface VaultModalProps {
   isOpen: boolean;
+  initialMode?: VaultModalMode;
   onClose: () => void;
-  vaults: VaultRecord[];
-  activeVault: VaultRecord | null;
-  onSelectVault: (vaultId: string) => void;
   onCreateVault: (name: string, passphrase: string, targets: VaultTarget[]) => Promise<void>;
   onImportVault: (token: string, passphrase: string) => Promise<void>;
-  onDeleteVault: (vaultId: string) => Promise<void>;
 }
 
 export const VaultModal: React.FC<VaultModalProps> = ({
   isOpen,
+  initialMode = 'create',
   onClose,
-  vaults,
-  activeVault,
-  onSelectVault,
   onCreateVault,
   onImportVault,
-  onDeleteVault,
 }) => {
-  const [activeTab, setActiveTab] = useState<'create' | 'import' | 'list'>('list');
+  const [activeTab, setActiveTab] = useState<VaultModalMode>(initialMode);
 
   // Create form state
   const [newName, setNewName] = useState('');
@@ -44,6 +41,13 @@ export const VaultModal: React.FC<VaultModalProps> = ({
   const [isLoading, setIsLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
+  useEffect(() => {
+    if (isOpen) {
+      setActiveTab(initialMode);
+      setErrorMsg(null);
+    }
+  }, [isOpen, initialMode]);
+
   if (!isOpen) return null;
 
   const handleCreateSubmit = async (e: React.FormEvent) => {
@@ -55,7 +59,7 @@ export const VaultModal: React.FC<VaultModalProps> = ({
 
     const validTargets = newTargets.filter((t) => t.target_id.trim() !== '');
     if (validTargets.length === 0) {
-      setErrorMsg('At least one Shared Drive or Folder ID must be provided.');
+      setErrorMsg('At least one Google Drive Folder ID must be provided.');
       return;
     }
 
@@ -91,13 +95,15 @@ export const VaultModal: React.FC<VaultModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4 z-50">
-      <div className="bg-slate-950 border border-slate-800 rounded-2xl w-full max-w-xl overflow-hidden shadow-2xl flex flex-col max-h-[85vh]">
+    <div className="fixed inset-0 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+      <div className="bg-slate-950 border border-slate-800 rounded-2xl w-full max-w-lg overflow-hidden shadow-2xl flex flex-col max-h-[85vh]">
         {/* Header */}
         <div className="flex items-center justify-between p-5 border-b border-slate-800">
-          <div className="flex items-center space-x-2">
-            <Layers className="w-5 h-5 text-cyan-400" />
-            <h3 className="text-sm font-bold text-slate-100">Manage Group Vaults</h3>
+          <div className="flex items-center space-x-2.5">
+            <FolderLock className="w-5 h-5 text-cyan-400" />
+            <h3 className="text-sm font-bold text-slate-100">
+              {activeTab === 'create' ? 'Create Personal Vault' : 'Import Personal Vault'}
+            </h3>
           </div>
           <button
             onClick={onClose}
@@ -107,46 +113,35 @@ export const VaultModal: React.FC<VaultModalProps> = ({
           </button>
         </div>
 
-        {/* Tabs */}
+        {/* Mode Switcher Tabs */}
         <div className="flex border-b border-slate-800 bg-slate-900/60 p-1 text-xs">
-          <button
-            onClick={() => {
-              setActiveTab('list');
-              setErrorMsg(null);
-            }}
-            className={`flex-1 py-2 rounded-lg font-semibold transition-all ${
-              activeTab === 'list'
-                ? 'bg-slate-800 text-cyan-400 shadow-sm border border-slate-700'
-                : 'text-slate-400 hover:text-slate-200'
-            }`}
-          >
-            Vault List ({vaults.length})
-          </button>
           <button
             onClick={() => {
               setActiveTab('create');
               setErrorMsg(null);
             }}
-            className={`flex-1 py-2 rounded-lg font-semibold transition-all ${
+            className={`flex-1 py-2 rounded-lg font-semibold flex items-center justify-center space-x-1.5 transition-all ${
               activeTab === 'create'
                 ? 'bg-slate-800 text-cyan-400 shadow-sm border border-slate-700'
                 : 'text-slate-400 hover:text-slate-200'
             }`}
           >
-            Create New Vault
+            <PlusCircle className="w-3.5 h-3.5" />
+            <span>Create New Vault</span>
           </button>
           <button
             onClick={() => {
               setActiveTab('import');
               setErrorMsg(null);
             }}
-            className={`flex-1 py-2 rounded-lg font-semibold transition-all ${
+            className={`flex-1 py-2 rounded-lg font-semibold flex items-center justify-center space-x-1.5 transition-all ${
               activeTab === 'import'
                 ? 'bg-slate-800 text-cyan-400 shadow-sm border border-slate-700'
                 : 'text-slate-400 hover:text-slate-200'
             }`}
           >
-            Import Vault Token
+            <DownloadCloud className="w-3.5 h-3.5" />
+            <span>Import Token (.magvault)</span>
           </button>
         </div>
 
@@ -159,68 +154,13 @@ export const VaultModal: React.FC<VaultModalProps> = ({
             </div>
           )}
 
-          {activeTab === 'list' && (
-            <div className="space-y-3">
-              {vaults.length === 0 ? (
-                <div className="text-center py-8 text-slate-500">
-                  No vaults saved. Create a new vault or import a token to get started.
-                </div>
-              ) : (
-                vaults.map((v) => {
-                  const isActive = activeVault?.id === v.id;
-                  return (
-                    <div
-                      key={v.id}
-                      onClick={() => onSelectVault(v.id)}
-                      className={`p-4 rounded-xl border flex items-center justify-between cursor-pointer transition-all ${
-                        isActive
-                          ? 'bg-cyan-500/10 border-cyan-500/40 text-slate-100 shadow-sm'
-                          : 'bg-slate-900 border-slate-800 text-slate-300 hover:border-slate-700'
-                      }`}
-                    >
-                      <div>
-                        <div className="flex items-center space-x-2">
-                          <span className="font-bold text-sm text-slate-100">{v.name}</span>
-                          <span className="text-[10px] px-2 py-0.5 rounded-full font-semibold bg-slate-800 text-cyan-400 border border-slate-700 uppercase">
-                            {v.role}
-                          </span>
-                          {isActive && (
-                            <span className="text-[10px] px-2 py-0.5 rounded-full font-semibold bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">
-                              Active
-                            </span>
-                          )}
-                        </div>
-                        <div className="text-[11px] text-slate-500 mt-1 font-mono">
-                          {v.targets.length} Target Drives/Folders • ID: {v.id}
-                        </div>
-                      </div>
-
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          if (confirm(`Remove vault "${v.name}" from this device?`)) {
-                            onDeleteVault(v.id);
-                          }
-                        }}
-                        className="p-1.5 rounded-lg text-slate-500 hover:text-rose-400 hover:bg-slate-800 transition-colors"
-                        title="Delete Vault"
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </button>
-                    </div>
-                  );
-                })
-              )}
-            </div>
-          )}
-
           {activeTab === 'create' && (
             <form onSubmit={handleCreateSubmit} className="space-y-4">
               <div>
                 <label className="font-semibold text-slate-400 block mb-1">Vault Name</label>
                 <input
                   type="text"
-                  placeholder="e.g., Alpha Project Data"
+                  placeholder="e.g. My Secure Drive"
                   value={newName}
                   onChange={(e) => setNewName(e.target.value)}
                   className="w-full bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 text-slate-200 focus:outline-none focus:border-cyan-500"
@@ -259,7 +199,7 @@ export const VaultModal: React.FC<VaultModalProps> = ({
                     }
                     className="text-[11px] text-cyan-400 hover:text-cyan-300 font-semibold"
                   >
-                    + Add Redundant / Parity Drive (Optional)
+                    + Add Parity Drive (Optional)
                   </button>
                 </div>
                 <div className="space-y-2">
@@ -300,7 +240,7 @@ export const VaultModal: React.FC<VaultModalProps> = ({
                   ))}
                 </div>
                 <p className="text-[10px] text-slate-500 mt-1.5">
-                  * Untuk vault personal sederhana, cukup 1 Folder ID utama. Jika Anda ingin proteksi Reed-Solomon multi-drive, Anda dapat menambahkan drive cadangan.
+                  * Untuk vault personal sederhana, 1 Folder ID utama sudah cukup. Jika ingin proteksi Reed-Solomon multi-drive, Anda dapat menambahkan drive cadangan.
                 </p>
               </div>
 
@@ -322,20 +262,20 @@ export const VaultModal: React.FC<VaultModalProps> = ({
                 </label>
                 <textarea
                   rows={4}
-                  placeholder="Paste base64 vault token string here..."
+                  placeholder="Paste encrypted base64 vault token string here..."
                   value={importToken}
                   onChange={(e) => setImportToken(e.target.value)}
-                  className="w-full bg-slate-900 border border-slate-800 rounded-lg p-3 text-slate-200 font-mono text-[11px] focus:outline-none focus:border-cyan-500 resize-none"
+                  className="w-full bg-slate-900 border border-slate-800 rounded-lg p-3 text-slate-200 font-mono text-xs focus:outline-none focus:border-cyan-500"
                 />
               </div>
 
               <div>
                 <label className="font-semibold text-slate-400 block mb-1">
-                  Vault Passphrase:
+                  Vault Passphrase
                 </label>
                 <input
                   type="password"
-                  placeholder="Passphrase to decrypt vault"
+                  placeholder="Passphrase used when this vault was created"
                   value={importPassphrase}
                   onChange={(e) => setImportPassphrase(e.target.value)}
                   className="w-full bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 text-slate-200 font-mono focus:outline-none focus:border-cyan-500"
@@ -345,9 +285,9 @@ export const VaultModal: React.FC<VaultModalProps> = ({
               <button
                 type="submit"
                 disabled={isLoading}
-                className="w-full py-2.5 rounded-lg font-bold bg-emerald-600 hover:bg-emerald-500 text-white transition-all shadow-md shadow-emerald-600/30 disabled:opacity-50 mt-4"
+                className="w-full py-2.5 rounded-lg font-bold bg-cyan-600 hover:bg-cyan-500 text-white transition-all shadow-md shadow-cyan-600/30 disabled:opacity-50 mt-2"
               >
-                {isLoading ? 'Importing...' : 'Import & Unlock Vault'}
+                {isLoading ? 'Importing Vault...' : 'Import Vault'}
               </button>
             </form>
           )}

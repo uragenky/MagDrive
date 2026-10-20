@@ -10,6 +10,7 @@ import {
   ShieldCheck,
   AlertTriangle,
   UploadCloud,
+  RefreshCw,
 } from 'lucide-react';
 import { PackageManifest } from '../types';
 
@@ -20,6 +21,8 @@ interface ExplorerViewProps {
   onCopyMagnet: (packageId: string) => void;
   onGoToUpload: () => void;
   isDownloading: string | null;
+  onSync?: () => void;
+  isSyncing?: boolean;
 }
 
 export const ExplorerView: React.FC<ExplorerViewProps> = ({
@@ -29,6 +32,8 @@ export const ExplorerView: React.FC<ExplorerViewProps> = ({
   onCopyMagnet,
   onGoToUpload,
   isDownloading,
+  onSync,
+  isSyncing = false,
 }) => {
   const [searchTerm, setSearchTerm] = useState('');
   const [filterType, setFilterType] = useState<'all' | 'file' | 'folder'>('all');
@@ -87,6 +92,18 @@ export const ExplorerView: React.FC<ExplorerViewProps> = ({
         </div>
 
         <div className="flex items-center space-x-2">
+          {onSync && (
+            <button
+              onClick={onSync}
+              disabled={isSyncing}
+              title="Sinkronisasi katalog manifest dari Google Drive"
+              className="flex items-center space-x-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-slate-950 hover:bg-slate-800 text-slate-300 border border-slate-800 hover:border-slate-700 transition-all shadow-sm disabled:opacity-50"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 text-cyan-400 ${isSyncing ? 'animate-spin' : ''}`} />
+              <span>{isSyncing ? 'Syncing...' : 'Sync Catalog'}</span>
+            </button>
+          )}
+
           <div className="bg-slate-950 p-1 rounded-lg border border-slate-800 flex text-xs">
             <button
               onClick={() => setFilterType('all')}

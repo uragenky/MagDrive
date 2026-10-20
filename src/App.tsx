@@ -12,7 +12,7 @@ import { TransfersView } from './components/TransfersView';
 import { SettingsView } from './components/SettingsView';
 import { HealthView } from './components/HealthView';
 import { MagnetModal } from './components/MagnetModal';
-import { VaultModal } from './components/VaultModal';
+import { VaultModal, VaultModalMode } from './components/VaultModal';
 import { DownloadModal } from './components/DownloadModal';
 
 import { PackageManifest, TransferRecord, VaultRecord, VaultTarget, TransferProgressPayload } from './types';
@@ -33,7 +33,7 @@ export function App() {
 
   // Modals
   const [isMagnetModalOpen, setIsMagnetModalOpen] = useState(false);
-  const [isVaultModalOpen, setIsVaultModalOpen] = useState(false);
+  const [vaultModalMode, setVaultModalMode] = useState<VaultModalMode | null>(null);
   const [downloadModalTarget, setDownloadModalTarget] = useState<{
     packageId: string;
     fileName: string;
@@ -105,6 +105,13 @@ export function App() {
       setActiveVault(v);
       const fileList = await api.listCatalogFiles();
       setFiles(fileList);
+
+      // Otomatis sinkronisasi catalog dari remote drive di background jika ada target drive
+      if (v && v.targets && v.targets.length > 0) {
+        api.syncCatalog()
+          .then(() => refreshFiles())
+          .catch((e) => console.warn('Background auto-sync failed:', e));
+      }
     } catch (err) {
       console.error('Failed to switch vault:', err);
     }
@@ -278,6 +285,9 @@ export function App() {
         vaults={vaults}
         activeVault={activeVault}
         onSelectVault={handleSelectVault}
+        onOpenCreateVault={() => setVaultModalMode('create')}
+        onOpenImportVault={() => setVaultModalMode('import')}
+        onDeleteVault={handleDeleteVault}
       />
 
       {/* Main View Area */}
@@ -285,9 +295,6 @@ export function App() {
         <Navbar
           activeVault={activeVault}
           onOpenMagnetModal={() => setIsMagnetModalOpen(true)}
-          onOpenVaultModal={() => setIsVaultModalOpen(true)}
-          onSync={handleSync}
-          isSyncing={isSyncing}
         />
 
         <main className="flex-1 overflow-hidden flex flex-col">
@@ -299,6 +306,8 @@ export function App() {
               onCopyMagnet={handleCopyMagnet}
               onGoToUpload={() => setActiveTab('upload')}
               isDownloading={isDownloading}
+              onSync={handleSync}
+              isSyncing={isSyncing}
             />
           )}
 
@@ -342,14 +351,11 @@ export function App() {
       />
 
       <VaultModal
-        isOpen={isVaultModalOpen}
-        onClose={() => setIsVaultModalOpen(false)}
-        vaults={vaults}
-        activeVault={activeVault}
-        onSelectVault={handleSelectVault}
+        isOpen={!!vaultModalMode}
+        initialMode={vaultModalMode || 'create'}
+        onClose={() => setVaultModalMode(null)}
         onCreateVault={handleCreateVault}
         onImportVault={handleImportVault}
-        onDeleteVault={handleDeleteVault}
       />
 
       {downloadModalTarget && (
