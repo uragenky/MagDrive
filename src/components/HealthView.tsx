@@ -34,7 +34,7 @@ export const HealthView: React.FC<HealthViewProps> = ({ activeVault, files, onRe
   if (!activeVault) {
     return (
       <div className="flex-1 flex items-center justify-center bg-slate-900 p-8 text-center text-slate-400">
-        Select a group vault to view redundancy health status.
+        Pilih atau buat Personal Vault untuk melihat status diagnostik penyimpanan.
       </div>
     );
   }
@@ -46,9 +46,9 @@ export const HealthView: React.FC<HealthViewProps> = ({ activeVault, files, onRe
     <div className="flex-1 bg-slate-900 overflow-y-auto p-8">
       <div className="max-w-4xl mx-auto space-y-8">
         <div>
-          <h2 className="text-xl font-bold text-slate-100">Vault Health & Redundancy Status</h2>
+          <h2 className="text-xl font-bold text-slate-100">Vault Health & Diagnostics</h2>
           <p className="text-xs text-slate-400 mt-1">
-            Monitor Reed-Solomon block integrity and multi-drive automated diagnostics.
+            Pantau integritas shard lokal, target Google Drive pribadi, dan verifikasi manifest enkripsi.
           </p>
         </div>
 

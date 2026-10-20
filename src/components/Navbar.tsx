@@ -24,18 +24,18 @@ export const Navbar: React.FC<NavbarProps> = ({
           <div>
             <div className="flex items-center space-x-2">
               <h2 className="text-lg font-bold text-slate-100">{activeVault.name}</h2>
-              <span className="text-xs px-2 py-0.5 rounded-full font-medium bg-cyan-500/10 text-cyan-400 border border-cyan-500/20 uppercase">
-                {activeVault.role}
+              <span className="text-xs px-2 py-0.5 rounded-full font-medium bg-cyan-500/10 text-cyan-400 border border-cyan-500/20 uppercase tracking-wider">
+                Personal Vault
               </span>
             </div>
             <p className="text-xs text-slate-400">
-              {activeVault.targets.length} Target Drives Connected • AES-256 Encryption Active
+              {activeVault.targets.length} Target Drive{activeVault.targets.length > 1 ? 's' : ''} Connected • AES-256 Zero-Knowledge
             </p>
           </div>
         ) : (
           <div className="flex items-center space-x-2 text-slate-400 text-sm">
             <ShieldCheck className="w-4 h-4 text-slate-500" />
-            <span>Select or Create a Group Vault to Get Started</span>
+            <span>Select or Create a Personal Vault to Get Started</span>
           </div>
         )}
       </div>

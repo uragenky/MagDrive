@@ -9,7 +9,6 @@ import { Navbar } from './components/Navbar';
 import { ExplorerView } from './components/ExplorerView';
 import { UploadView } from './components/UploadView';
 import { TransfersView } from './components/TransfersView';
-import { MembersView } from './components/MembersView';
 import { SettingsView } from './components/SettingsView';
 import { HealthView } from './components/HealthView';
 import { MagnetModal } from './components/MagnetModal';
@@ -319,13 +318,6 @@ export function App() {
               onCancel={handleCancelTransfer}
               onDelete={handleDeleteTransfer}
               onClearFinished={handleClearFinished}
-            />
-          )}
-
-          {activeTab === 'members' && (
-            <MembersView
-              activeVault={activeVault}
-              onExportVault={(id, role) => api.exportVaultConfig(id, role)}
             />
           )}
 

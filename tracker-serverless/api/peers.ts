@@ -8,8 +8,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   const { topic } = req.query;
 
-  if (!topic || typeof topic !== 'string') {
-    return res.status(400).json({ error: 'Missing or invalid topic query parameter' });
+  if (!topic || typeof topic !== 'string' || !/^[a-f0-9]{64}$/i.test(topic)) {
+    return res.status(400).json({ error: 'Invalid topic hash: must be 64-character hex string' });
   }
 
   try {

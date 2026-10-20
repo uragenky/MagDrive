@@ -15,6 +15,7 @@ import {
   FolderOpen,
   RotateCcw,
   Server,
+  Share2,
 } from 'lucide-react';
 import { openUrl } from '@tauri-apps/plugin-opener';
 import { listen } from '@tauri-apps/api/event';
@@ -55,9 +56,15 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   // Targets state for active vault
   const [targets, setTargets] = useState<VaultTarget[]>([]);
   const [newTargetId, setNewTargetId] = useState('');
-  const [newTargetType, setNewTargetType] = useState<'SharedDrive' | 'SharedFolder'>('SharedDrive');
   const [newTargetLabel, setNewTargetLabel] = useState('');
+  const [newTargetType, setNewTargetType] = useState<'SharedDrive' | 'SharedFolder'>('SharedFolder');
   const [isSavingTargets, setIsSavingTargets] = useState(false);
+
+  // Vault Backup Token Export state
+  const [exportedToken, setExportedToken] = useState<string | null>(null);
+  const [isExportingToken, setIsExportingToken] = useState(false);
+  const [tokenCopied, setTokenCopied] = useState(false);
+  const [backupError, setBackupError] = useState<string | null>(null);
 
   const jsonFileInputRef = useRef<HTMLInputElement>(null);
 
@@ -179,6 +186,27 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     } finally {
       setIsSavingTracker(false);
     }
+  };
+
+  const handleExportVaultBackup = async () => {
+    if (!activeVault) return;
+    setIsExportingToken(true);
+    setBackupError(null);
+    try {
+      const token = await api.exportVaultConfig(activeVault.id, 'admin');
+      setExportedToken(token);
+    } catch (err: any) {
+      setBackupError(typeof err === 'string' ? err : 'Gagal mengekspor token vault backup.');
+    } finally {
+      setIsExportingToken(false);
+    }
+  };
+
+  const handleCopyBackupToken = () => {
+    if (!exportedToken) return;
+    navigator.clipboard.writeText(exportedToken);
+    setTokenCopied(true);
+    setTimeout(() => setTokenCopied(false), 2000);
   };
 
   const handleSaveGcp = async (e: React.FormEvent) => {
@@ -718,6 +746,71 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                 </button>
               </div>
             </div>
+          </div>
+        )}
+
+        {/* Section 5: Vault Backup & Migration */}
+        {activeVault && (
+          <div className="bg-slate-950 border border-slate-800 rounded-2xl p-6 space-y-4">
+            <div className="flex items-center justify-between border-b border-slate-800/80 pb-3">
+              <div className="flex items-center space-x-2">
+                <Share2 className="w-5 h-5 text-emerald-400" />
+                <div>
+                  <h3 className="text-sm font-bold text-slate-100">
+                    Vault Backup & Device Migration (.magvault)
+                  </h3>
+                  <p className="text-[11px] text-slate-500">
+                    Cadangkan token konfigurasi terenkripsi untuk memindahkan atau memulihkan vault pribadi di perangkat lain.
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-between">
+              <p className="text-xs text-slate-400 max-w-lg">
+                Token ini memuat target folder ID vault Anda yang terenkripsi dengan passphrase master vault. Token ini aman disimpan sebagai cadangan.
+              </p>
+              <button
+                onClick={handleExportVaultBackup}
+                disabled={isExportingToken}
+                className="flex items-center space-x-1.5 px-4 py-2 rounded-lg text-xs font-semibold bg-emerald-600 hover:bg-emerald-500 text-white transition-all shadow-md shadow-emerald-600/20 disabled:opacity-50 shrink-0"
+              >
+                <Key className="w-3.5 h-3.5" />
+                <span>{isExportingToken ? 'Generating...' : 'Export Backup Token'}</span>
+              </button>
+            </div>
+
+            {backupError && (
+              <div className="p-3 rounded-lg bg-rose-500/10 border border-rose-500/20 text-rose-400 text-xs flex items-center space-x-2">
+                <AlertCircle className="w-4 h-4 shrink-0" />
+                <span>{backupError}</span>
+              </div>
+            )}
+
+            {exportedToken && (
+              <div className="bg-slate-900 border border-slate-800 rounded-xl p-4 space-y-2 mt-2">
+                <div className="flex items-center justify-between text-xs text-slate-400">
+                  <span className="font-semibold text-slate-300">Encrypted Backup Token:</span>
+                  <button
+                    onClick={handleCopyBackupToken}
+                    className="flex items-center space-x-1 text-cyan-400 hover:text-cyan-300 font-semibold"
+                  >
+                    {tokenCopied ? (
+                      <Check className="w-3.5 h-3.5 text-emerald-400" />
+                    ) : (
+                      <Copy className="w-3.5 h-3.5" />
+                    )}
+                    <span>{tokenCopied ? 'Tersalin!' : 'Salin Token'}</span>
+                  </button>
+                </div>
+                <div className="bg-slate-950 p-3 rounded-lg border border-slate-800 font-mono text-[10px] text-slate-300 break-all select-all max-h-28 overflow-y-auto">
+                  {exportedToken}
+                </div>
+                <p className="text-[11px] text-slate-500 italic">
+                  * Untuk restore di komputer lain, buka menu daftar Vault &gt; tab Import Vault, lalu masukkan token ini beserta passphrase vault Anda.
+                </p>
+              </div>
+            )}
           </div>
         )}
       </div>

@@ -3,7 +3,6 @@ import {
   HardDrive,
   UploadCloud,
   ArrowUpDown,
-  Users,
   Activity,
   Settings,
   ChevronDown,
@@ -11,7 +10,7 @@ import {
 } from 'lucide-react';
 import { VaultRecord } from '../types';
 
-export type ActiveTab = 'explorer' | 'upload' | 'transfers' | 'members' | 'health' | 'settings';
+export type ActiveTab = 'explorer' | 'upload' | 'transfers' | 'health' | 'settings';
 
 interface SidebarProps {
   activeTab: ActiveTab;
@@ -32,7 +31,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
     { id: 'explorer', label: 'File Explorer', icon: HardDrive },
     { id: 'upload', label: 'Upload Files', icon: UploadCloud },
     { id: 'transfers', label: 'Transfer Queue', icon: ArrowUpDown },
-    { id: 'members', label: 'Access & Members', icon: Users },
     { id: 'health', label: 'Vault Health', icon: Activity },
     { id: 'settings', label: 'Settings & GCP', icon: Settings },
   ] as const;
@@ -71,7 +69,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
               ) : (
                 vaults.map((v) => (
                   <option key={v.id} value={v.id}>
-                    {v.name} ({v.role})
+                    {v.name}
                   </option>
                 ))
               )}

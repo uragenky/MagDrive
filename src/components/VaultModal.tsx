@@ -34,9 +34,7 @@ export const VaultModal: React.FC<VaultModalProps> = ({
   const [newName, setNewName] = useState('');
   const [newPassphrase, setNewPassphrase] = useState('');
   const [newTargets, setNewTargets] = useState<VaultTarget[]>([
-    { label: 'Drive Alpha (Data 1)', target_type: 'SharedDrive', target_id: '' },
-    { label: 'Drive Beta (Data 2)', target_type: 'SharedDrive', target_id: '' },
-    { label: 'Drive Gamma (Parity)', target_type: 'SharedDrive', target_id: '' },
+    { label: 'Primary Drive', target_type: 'SharedFolder', target_id: '' },
   ]);
 
   // Import form state
@@ -243,9 +241,27 @@ export const VaultModal: React.FC<VaultModalProps> = ({
               </div>
 
               <div>
-                <label className="font-semibold text-slate-400 block mb-1">
-                  Target Google Drive / Folder IDs:
-                </label>
+                <div className="flex items-center justify-between mb-1.5">
+                  <label className="font-semibold text-slate-400 block">
+                    Target Google Drive / Folder ID:
+                  </label>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setNewTargets([
+                        ...newTargets,
+                        {
+                          label: `Drive ${newTargets.length + 1} (Parity)`,
+                          target_type: 'SharedFolder',
+                          target_id: '',
+                        },
+                      ])
+                    }
+                    className="text-[11px] text-cyan-400 hover:text-cyan-300 font-semibold"
+                  >
+                    + Add Redundant / Parity Drive (Optional)
+                  </button>
+                </div>
                 <div className="space-y-2">
                   {newTargets.map((t, idx) => (
                     <div key={idx} className="flex gap-2">
@@ -262,7 +278,7 @@ export const VaultModal: React.FC<VaultModalProps> = ({
                       />
                       <input
                         type="text"
-                        placeholder="Shared Drive / Folder ID (e.g., 0AJk...)"
+                        placeholder="Google Drive Folder ID (e.g. 1AbC...)"
                         value={t.target_id}
                         onChange={(e) => {
                           const copy = [...newTargets];
@@ -271,9 +287,21 @@ export const VaultModal: React.FC<VaultModalProps> = ({
                         }}
                         className="flex-1 bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 text-slate-200 font-mono focus:outline-none focus:border-cyan-500"
                       />
+                      {newTargets.length > 1 && (
+                        <button
+                          type="button"
+                          onClick={() => setNewTargets(newTargets.filter((_, i) => i !== idx))}
+                          className="px-2 text-slate-500 hover:text-rose-400 text-xs"
+                        >
+                          ✕
+                        </button>
+                      )}
                     </div>
                   ))}
                 </div>
+                <p className="text-[10px] text-slate-500 mt-1.5">
+                  * Untuk vault personal sederhana, cukup 1 Folder ID utama. Jika Anda ingin proteksi Reed-Solomon multi-drive, Anda dapat menambahkan drive cadangan.
+                </p>
               </div>
 
               <button
