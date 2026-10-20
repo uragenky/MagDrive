@@ -1,4 +1,4 @@
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
@@ -109,6 +109,7 @@ impl Database {
 
         // Non-destructive migration for existing databases
         let _ = conn.execute("ALTER TABLE transfers ADD COLUMN destination_path TEXT", []);
+        let _ = conn.execute("ALTER TABLE packages ADD COLUMN package_key_enc TEXT", []);
 
         Ok(())
     }
@@ -269,6 +270,27 @@ impl Database {
             ],
         )?;
         Ok(())
+    }
+
+    pub fn set_package_key_enc(&self, package_id: &str, key_enc: &str) -> Result<(), StorageError> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE packages SET package_key_enc = ?1 WHERE id = ?2",
+            params![key_enc, package_id],
+        )?;
+        Ok(())
+    }
+
+    pub fn get_package_key_enc(&self, package_id: &str) -> Result<Option<String>, StorageError> {
+        let conn = self.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT package_key_enc FROM packages WHERE id = ?1",
+            params![package_id],
+            |row| row.get(0),
+        )
+        .optional()
+        .map(|opt| opt.flatten())
+        .map_err(StorageError::from)
     }
 
     pub fn list_packages(&self, vault_id: &str) -> Result<Vec<PackageManifest>, StorageError> {

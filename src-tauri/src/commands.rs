@@ -1,5 +1,6 @@
 use base64::Engine;
 use futures::StreamExt;
+use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use sha2::Digest;
 use std::collections::HashMap;
@@ -21,7 +22,7 @@ use crate::drive::permissions::DrivePermissionItem;
 use crate::erasure::rs::{encode, reconstruct};
 use crate::magnet::parser::{generate_swarm_magnet_link, parse_magnet_link, MagnetInfo};
 use crate::storage::db::{Database, TransferRecord};
-use crate::tracker::{announce_to_trackers, calculate_blind_topic, fetch_peers_multi};
+use crate::tracker::{announce_to_trackers, calculate_blind_topic, fetch_peers_multi, report_dead_multi};
 use crate::vault::model::{VaultExportPayload, VaultRecord, VaultRole, VaultTarget};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -660,9 +661,34 @@ pub async fn generate_magnet(
     let vault_id = state.db.get_setting("active_vault_id").unwrap_or_default();
     let vault = state.db.get_vault(&vault_id).map_err(|e| e.to_string())?;
 
-    let key_b64 = if let Some(ref v) = vault {
+    let key_b64 = if let Ok(Some(enc_hex)) = state.db.get_package_key_enc(&package_id) {
+        // Try unwrapping package-specific key using cached master key
+        if let Some(ref v) = vault {
+            let lock = state.key_cache.lock().unwrap();
+            let master_key = lock.get(&v.id).copied().or_else(|| {
+                lock.iter()
+                    .find(|(k, _)| k.starts_with(&v.id))
+                    .map(|(_, val)| *val)
+            });
+            if let Some(mk) = master_key {
+                if let Ok(raw_enc) = base64::engine::general_purpose::STANDARD.decode(&enc_hex) {
+                    if let Ok(unwrapped) = decrypt_chunk(&raw_enc, &mk) {
+                        Some(base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(unwrapped))
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    } else if let Some(ref v) = vault {
+        // Fallback for legacy packages encrypted directly with master key
         let lock = state.key_cache.lock().unwrap();
-        // Check direct vault_id match or prefix match (vault_id:sha256)
         let found_key = lock.get(&v.id).copied().or_else(|| {
             lock.iter()
                 .find(|(k, _)| k.starts_with(&v.id))
@@ -964,6 +990,8 @@ pub async fn copy_shards_to_my_drive(
     );
 
     let mut copied_count = 0;
+    let mut new_file_ids = HashMap::new();
+
     for (idx, chunk) in chunk_refs.iter().enumerate() {
         let chunk_file_name = format!("chunk_{}_{}.bin", package_id, chunk.sha256);
         let copy_res = client
@@ -971,8 +999,9 @@ pub async fn copy_shards_to_my_drive(
             .await;
 
         match copy_res {
-            Ok(_) => {
+            Ok(created_item) => {
                 copied_count += 1;
+                new_file_ids.insert(chunk.sha256.clone(), created_item.id);
                 let transferred = if total_chunks > 0 {
                     (pkg.total_size * copied_count as u64) / total_chunks as u64
                 } else {
@@ -1002,6 +1031,40 @@ pub async fn copy_shards_to_my_drive(
                 let err_msg = format!("Failed to copy shard {}: {}", idx, e);
                 let _ = state.db.update_transfer_status(&transfer_id, "failed", Some(&err_msg));
                 return Err(err_msg);
+            }
+        }
+    }
+
+    // Clone and update manifest with newly copied local chunk file IDs
+    let mut updated_manifest = pkg.clone();
+    for stripe in &mut updated_manifest.stripes {
+        for chunk in &mut stripe.chunks {
+            if let Some(new_id) = new_file_ids.get(&chunk.sha256) {
+                chunk.file_id = new_id.clone();
+                chunk.target_id = target.target_id.clone();
+            }
+        }
+    }
+
+    // Save updated manifest in local database
+    let _ = state.db.upsert_package(&vault_id, &updated_manifest);
+
+    // Resolve vault master key to re-encrypt manifest into target's .magdrive/metadata/
+    let master_key_opt = {
+        let lock = state.key_cache.lock().unwrap();
+        lock.get(&vault.id).copied().or_else(|| {
+            lock.iter()
+                .find(|(k, _)| k.starts_with(&vault.id))
+                .map(|(_, val)| *val)
+        })
+    };
+
+    if let Some(mk) = master_key_opt {
+        // Upload re-encrypted manifest to recipient vault's .magdrive/metadata/ folder
+        if let Ok(meta_bytes) = updated_manifest.encrypt(&mk) {
+            let meta_file_name = format!("meta_{}.enc", package_id);
+            if let Ok(meta_dir) = ensure_cached_folder(&client, &state.folder_cache, &magdrive_dir, "metadata").await {
+                let _ = client.upload_file(&meta_dir, &meta_file_name, &meta_bytes).await;
             }
         }
     }
@@ -1105,12 +1168,46 @@ pub async fn delete_package(
         .mark_deleted(&package_id, &sig)
         .map_err(|e| e.to_string())?;
 
-    // Attempt to delete chunk files from cloud targets
+    // Attempt to delete chunk files and metadata manifest from cloud targets
     if let Ok(client) = get_drive_client(&state.db).await {
-        for stripe in pkg.stripes {
-            for chunk in stripe.chunks {
+        for stripe in &pkg.stripes {
+            for chunk in &stripe.chunks {
                 let _ = client.delete_file(&chunk.file_id).await;
             }
+        }
+
+        // Clean up meta_<package_id>.enc in .magdrive/metadata/ across all active vault targets
+        let vault_id = state.db.get_setting("active_vault_id").unwrap_or_default();
+        if let Ok(Some(vault)) = state.db.get_vault(&vault_id) {
+            let manifest_name = format!("meta_{}.enc", package_id);
+            for target in &vault.targets {
+                if let Ok(Some(magdrive_dir)) = client.find_subfolder(&target.target_id, ".magdrive").await {
+                    if let Ok(Some(meta_dir)) = client.find_subfolder(&magdrive_dir, "metadata").await {
+                        if let Ok(files) = client.list_files_in_folder(&meta_dir).await {
+                            for f in files {
+                                if f.name == manifest_name {
+                                    let _ = client.delete_file(&f.id).await;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Report dead to swarm trackers so node is deregistered
+    let trackers = get_tracker_urls_from_db(&state.db);
+    let topic = calculate_blind_topic(&package_id);
+    let vault_id = state.db.get_setting("active_vault_id").unwrap_or_default();
+    if let Ok(Some(vault)) = state.db.get_vault(&vault_id) {
+        for target in vault.targets {
+            let t_id = target.target_id.clone();
+            let tr_clone = trackers.clone();
+            let top_clone = topic.clone();
+            tokio::spawn(async move {
+                report_dead_multi(&tr_clone, &top_clone, &t_id).await;
+            });
         }
     }
 
@@ -1318,7 +1415,15 @@ pub async fn upload_file_package(
 
     let pass = passphrase.unwrap_or_else(|| "magdrive".to_string());
     let salt = hex::decode(&vault.salt_hex).map_err(|e| e.to_string())?;
-    let key = get_or_derive_master_key(&state.key_cache, &vault.id, &pass, &salt)?;
+    let master_key = get_or_derive_master_key(&state.key_cache, &vault.id, &pass, &salt)?;
+
+    // Generate isolated random 32-byte key specifically for this package
+    let mut key = [0u8; 32];
+    rand::thread_rng().fill_bytes(&mut key);
+
+    // Wrap/encrypt package_key with master_key for local storage
+    let wrapped_package_key = encrypt_chunk(&key, &master_key).map_err(|e| e.to_string())?;
+    let wrapped_key_b64 = base64::engine::general_purpose::STANDARD.encode(&wrapped_package_key);
 
     let uploader_pubkey = state.keypair.lock().unwrap().public_key_hex();
 
@@ -1504,6 +1609,7 @@ pub async fn upload_file_package(
 
     // Save to local SQLite
     state.db.upsert_package(&vault_id, &manifest).map_err(|e| e.to_string())?;
+    let _ = state.db.set_package_key_enc(&package_id, &wrapped_key_b64);
 
     // Set targets public viewer so other accounts can copy/download encrypted shards
     for target in &vault.targets {
@@ -1785,7 +1891,28 @@ pub async fn download_package(
         }
     } else {
         let salt = hex::decode(&vault.salt_hex).map_err(|e| e.to_string())?;
-        get_or_derive_master_key(&state.key_cache, &vault.id, "magdrive", &salt)?
+        let master_key = get_or_derive_master_key(&state.key_cache, &vault.id, "magdrive", &salt)?;
+
+        // Try unwrapping package-specific key from db
+        if let Ok(Some(enc_hex)) = state.db.get_package_key_enc(&package_id) {
+            if let Ok(raw_enc) = base64::engine::general_purpose::STANDARD.decode(&enc_hex) {
+                if let Ok(unwrapped) = decrypt_chunk(&raw_enc, &master_key) {
+                    if unwrapped.len() == 32 {
+                        let mut k = [0u8; 32];
+                        k.copy_from_slice(&unwrapped);
+                        k
+                    } else {
+                        master_key
+                    }
+                } else {
+                    master_key
+                }
+            } else {
+                master_key
+            }
+        } else {
+            master_key
+        }
     };
 
     let client = get_drive_client(&state.db).await?;
@@ -2198,7 +2325,15 @@ pub async fn finish_upload_session(
 
     let pass = session.passphrase.unwrap_or_else(|| "magdrive".to_string());
     let salt = hex::decode(&vault.salt_hex).map_err(|e| e.to_string())?;
-    let key = get_or_derive_master_key(&state.key_cache, &vault.id, &pass, &salt)?;
+    let master_key = get_or_derive_master_key(&state.key_cache, &vault.id, &pass, &salt)?;
+
+    // Generate isolated random 32-byte key specifically for this package
+    let mut key = [0u8; 32];
+    rand::thread_rng().fill_bytes(&mut key);
+
+    // Wrap/encrypt package_key with master_key for local storage
+    let wrapped_package_key = encrypt_chunk(&key, &master_key).map_err(|e| e.to_string())?;
+    let wrapped_key_b64 = base64::engine::general_purpose::STANDARD.encode(&wrapped_package_key);
 
     let uploader_pubkey = state.keypair.lock().unwrap().public_key_hex();
 
@@ -2385,6 +2520,7 @@ pub async fn finish_upload_session(
     futures::future::join_all(manifest_futures).await;
 
     state.db.upsert_package(&vault.id, &manifest).map_err(|e| e.to_string())?;
+    let _ = state.db.set_package_key_enc(&package_id, &wrapped_key_b64);
 
     // Set targets public viewer so other accounts can copy/download encrypted shards
     for target in &vault.targets {
