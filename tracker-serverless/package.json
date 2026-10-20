@@ -3,11 +3,9 @@
   "version": "1.0.0",
   "description": "Zero-Knowledge Blind Swarm Tracker for MagDrive on Vercel + Turso",
   "main": "api/peers.ts",
-  "scripts": {
-    "build": "tsc"
-  },
+  "scripts": {},
   "dependencies": {
-    "@libsql/client": "^0.6.0"
+    "@libsql/client": "^0.18.0"
   },
   "devDependencies": {
     "@vercel/node": "^3.0.0",
