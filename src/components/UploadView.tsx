@@ -9,6 +9,7 @@ import {
   AlertCircle,
 } from 'lucide-react';
 import { VaultRecord, TransferProgressPayload } from '../types';
+import { api } from '../services/api';
 
 interface UploadViewProps {
   activeVault: VaultRecord | null;
@@ -104,9 +105,14 @@ export const UploadView: React.FC<UploadViewProps> = ({
         }
       );
 
-      const magnet = `magdrive:?xt=urn:magdrive:${pkgId}&vh=${activeVault.id}&sz=${selectedFile.size}&dn=${encodeURIComponent(
-        selectedFile.name
-      )}`;
+      let magnet = '';
+      try {
+        magnet = await api.generateMagnet(pkgId);
+      } catch (e) {
+        magnet = `magdrive:?xt=urn:magdrive:${pkgId}&vh=${activeVault.id}&sz=${selectedFile.size}&dn=${encodeURIComponent(
+          selectedFile.name
+        )}`;
+      }
 
       setUploadResult({
         packageId: pkgId,

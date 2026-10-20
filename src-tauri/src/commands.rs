@@ -724,37 +724,78 @@ pub async fn resolve_magnet_package(
 
     let peer_count = peers.len();
 
-    // If key is provided in magnet, try to download and decrypt manifest from peers
-    if let Some(ref key_str) = info.key {
-        let key_bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
-            .decode(key_str)
-            .or_else(|_| base64::engine::general_purpose::STANDARD.decode(key_str))
-            .map_err(|e| format!("Invalid key in magnet: {}", e))?;
+    // If key is provided in magnet or active vault key exists, try to download and decrypt manifest from peers/vaults
+    let possible_keys: Vec<[u8; 32]> = {
+        let mut keys = Vec::new();
+        if let Some(ref key_str) = info.key {
+            if let Ok(key_bytes) = base64::engine::general_purpose::URL_SAFE_NO_PAD
+                .decode(key_str)
+                .or_else(|_| base64::engine::general_purpose::STANDARD.decode(key_str))
+            {
+                if key_bytes.len() == 32 {
+                    let mut k = [0u8; 32];
+                    k.copy_from_slice(&key_bytes);
+                    keys.push(k);
+                }
+            }
+        }
+        // Fallback to active vault master key if cached
+        let vault_id = state.db.get_setting("active_vault_id").unwrap_or_default();
+        if !vault_id.is_empty() {
+            let lock = state.key_cache.lock().unwrap();
+            for (k, v) in lock.iter() {
+                if k.starts_with(&vault_id) && !keys.contains(v) {
+                    keys.push(*v);
+                }
+            }
+        }
+        keys
+    };
 
-        if key_bytes.len() == 32 {
-            let mut master_key = [0u8; 32];
-            master_key.copy_from_slice(&key_bytes);
+    if !possible_keys.is_empty() {
+        if let Ok(client) = get_drive_client(&state.db).await {
+            let manifest_name = format!("meta_{}.enc", info.package_id);
+            let mut search_folders = peers.clone();
 
-            if let Ok(client) = get_drive_client(&state.db).await {
-                let manifest_name = format!("meta_{}.enc", info.package_id);
-                for peer_folder in &peers {
-                    if let Ok(files) = client.list_files_in_folder(peer_folder).await {
+            // Also search in current vault targets if available
+            let vault_id = state.db.get_setting("active_vault_id").unwrap_or_default();
+            if let Ok(Some(vault)) = state.db.get_vault(&vault_id) {
+                for t in vault.targets {
+                    if !search_folders.contains(&t.target_id) {
+                        search_folders.push(t.target_id);
+                    }
+                }
+            }
+
+            for folder_id in &search_folders {
+                // Check both root and .magdrive/metadata/ folder path
+                let mut meta_folder_candidates = vec![folder_id.clone()];
+                if let Ok(magdrive_dir) = ensure_cached_folder(&client, &state.folder_cache, folder_id, ".magdrive").await {
+                    if let Ok(meta_dir) = ensure_cached_folder(&client, &state.folder_cache, &magdrive_dir, "metadata").await {
+                        meta_folder_candidates.push(meta_dir);
+                    }
+                }
+
+                for meta_dir in meta_folder_candidates {
+                    if let Ok(files) = client.list_files_in_folder(&meta_dir).await {
                         for f in files {
                             if f.name == manifest_name {
                                 if let Ok(enc_data) = client.download_file(&f.id).await {
-                                    if let Ok(manifest) = PackageManifest::decrypt(&enc_data, &master_key) {
-                                        let vault_id = state.db.get_setting("active_vault_id").unwrap_or_else(|| "default_vault".to_string());
-                                        let _ = state.db.upsert_package(&vault_id, &manifest);
-                                        return Ok(SwarmResolveResult {
-                                            package_id: manifest.package_id,
-                                            name: manifest.name,
-                                            total_size: manifest.total_size,
-                                            peer_count,
-                                            sources: peers,
-                                            trackers: tracker_list,
-                                            is_local: false,
-                                            key: info.key,
-                                        });
+                                    for key in &possible_keys {
+                                        if let Ok(manifest) = PackageManifest::decrypt(&enc_data, key) {
+                                            let v_id = state.db.get_setting("active_vault_id").unwrap_or_else(|| "default_vault".to_string());
+                                            let _ = state.db.upsert_package(&v_id, &manifest);
+                                            return Ok(SwarmResolveResult {
+                                                package_id: manifest.package_id,
+                                                name: manifest.name,
+                                                total_size: manifest.total_size,
+                                                peer_count,
+                                                sources: peers,
+                                                trackers: tracker_list,
+                                                is_local: false,
+                                                key: info.key,
+                                            });
+                                        }
                                     }
                                 }
                             }
@@ -784,11 +825,76 @@ pub async fn copy_shards_to_my_drive(
     package_id: String,
     opt_in_seeding: bool,
 ) -> Result<String, String> {
-    let pkg = state
-        .db
-        .get_package(&package_id)
-        .map_err(|e| e.to_string())?
-        .ok_or("Package not found in local catalog.")?;
+    let pkg = match state.db.get_package(&package_id).map_err(|e| e.to_string())? {
+        Some(p) => p,
+        None => {
+            // Fallback: Check if we can sync or find the manifest from connected trackers/targets
+            let topic = calculate_blind_topic(&package_id);
+            let trackers = get_tracker_urls_from_db(&state.db);
+            let peers = fetch_peers_multi(&trackers, &topic).await;
+
+            let vault_id = state
+                .db
+                .get_setting("active_vault_id")
+                .unwrap_or_else(|| "default_vault".to_string());
+
+            let mut resolved = None;
+            if let Ok(client) = get_drive_client(&state.db).await {
+                let manifest_name = format!("meta_{}.enc", package_id);
+                let mut search_folders = peers;
+
+                if let Ok(Some(vault)) = state.db.get_vault(&vault_id) {
+                    for t in vault.targets {
+                        if !search_folders.contains(&t.target_id) {
+                            search_folders.push(t.target_id);
+                        }
+                    }
+                }
+
+                // Check active vault keys
+                let mut candidate_keys = Vec::new();
+                {
+                    let lock = state.key_cache.lock().unwrap();
+                    for (k, v) in lock.iter() {
+                        if k.starts_with(&vault_id) {
+                            candidate_keys.push(*v);
+                        }
+                    }
+                }
+
+                'search: for folder_id in search_folders {
+                    let mut meta_candidates = vec![folder_id.clone()];
+                    if let Ok(magdrive_dir) = ensure_cached_folder(&client, &state.folder_cache, &folder_id, ".magdrive").await {
+                        if let Ok(meta_dir) = ensure_cached_folder(&client, &state.folder_cache, &magdrive_dir, "metadata").await {
+                            meta_candidates.push(meta_dir);
+                        }
+                    }
+
+                    for m_dir in meta_candidates {
+                        if let Ok(files) = client.list_files_in_folder(&m_dir).await {
+                            for f in files {
+                                if f.name == manifest_name {
+                                    if let Ok(enc_data) = client.download_file(&f.id).await {
+                                        for k in &candidate_keys {
+                                            if let Ok(manifest) = PackageManifest::decrypt(&enc_data, k) {
+                                                let _ = state.db.upsert_package(&vault_id, &manifest);
+                                                resolved = Some(manifest);
+                                                break 'search;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            resolved.ok_or_else(|| {
+                "Package not found in local catalog. Please ensure the magnet link includes the master encryption key (&k=) or sync catalog first.".to_string()
+            })?
+        }
+    };
 
     let vault_id = state
         .db
