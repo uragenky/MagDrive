@@ -37,7 +37,7 @@ export const MagnetModal: React.FC<MagnetModalProps> = ({
         setSwarmInfo(resolved);
       } catch (err: any) {
         setSwarmInfo(null);
-        setErrorMsg(typeof err === 'string' ? err : 'Gagal mengenali tautan magnet.');
+        setErrorMsg(typeof err === 'string' ? err : 'Failed to resolve magnet link.');
       } finally {
         setIsResolving(false);
       }
@@ -59,9 +59,9 @@ export const MagnetModal: React.FC<MagnetModalProps> = ({
     setCopySuccessMsg(null);
     try {
       const msg = await api.copyShardsToMyDrive(swarmInfo.package_id, optInSeeding);
-      setCopySuccessMsg(msg || 'Penyalinan shard ke Google Drive Anda berhasil!');
+      setCopySuccessMsg(msg || 'Successfully copied shards to your Google Drive!');
     } catch (err: any) {
-      setErrorMsg(typeof err === 'string' ? err : 'Gagal menyalin shard ke Google Drive.');
+      setErrorMsg(typeof err === 'string' ? err : 'Failed to copy shards to Google Drive.');
     } finally {
       setIsCopying(false);
     }
@@ -81,7 +81,7 @@ export const MagnetModal: React.FC<MagnetModalProps> = ({
         <div className="flex items-center justify-between p-5 border-b border-slate-800">
           <div className="flex items-center space-x-2">
             <LinkIcon className="w-5 h-5 text-cyan-400" />
-            <h3 className="text-sm font-bold text-slate-100">Buka MagDrive Magnet Link</h3>
+            <h3 className="text-sm font-bold text-slate-100">Open MagDrive Magnet Link</h3>
           </div>
           <button
             onClick={onClose}
@@ -94,7 +94,7 @@ export const MagnetModal: React.FC<MagnetModalProps> = ({
         <div className="p-6 space-y-4 text-xs">
           <div>
             <label className="font-semibold text-slate-300 block mb-1.5">
-              Tempel Magnet URI:
+              Paste Magnet URI:
             </label>
             <textarea
               rows={3}
@@ -108,7 +108,7 @@ export const MagnetModal: React.FC<MagnetModalProps> = ({
           {isResolving && (
             <div className="flex items-center space-x-2 text-cyan-400 py-1">
               <Loader2 className="w-4 h-4 animate-spin" />
-              <span>Menghubungi multi-tracker & mendeteksi mirror swarm...</span>
+              <span>Contacting multi-trackers & discovering mirror swarm...</span>
             </div>
           )}
 
@@ -131,7 +131,7 @@ export const MagnetModal: React.FC<MagnetModalProps> = ({
               <div className="flex items-center justify-between text-cyan-400 font-semibold">
                 <div className="flex items-center space-x-2">
                   <FileText className="w-4 h-4" />
-                  <span>Pratinjau File:</span>
+                  <span>File Preview:</span>
                 </div>
                 <div className="flex items-center space-x-1.5 px-2.5 py-0.5 rounded-full text-[11px] bg-cyan-950 text-cyan-300 border border-cyan-800">
                   <Globe className="w-3 h-3" />
@@ -141,11 +141,11 @@ export const MagnetModal: React.FC<MagnetModalProps> = ({
 
               <div className="grid grid-cols-2 gap-2 text-slate-300">
                 <div>
-                  <span className="text-slate-500 block text-[10px]">Nama File:</span>
-                  <span className="font-semibold text-slate-200 truncate block">{swarmInfo.name || '(Tanpa Nama)'}</span>
+                  <span className="text-slate-500 block text-[10px]">File Name:</span>
+                  <span className="font-semibold text-slate-200 truncate block">{swarmInfo.name || '(Unnamed)'}</span>
                 </div>
                 <div>
-                  <span className="text-slate-500 block text-[10px]">Ukuran Asli:</span>
+                  <span className="text-slate-500 block text-[10px]">Original Size:</span>
                   <span className="font-mono text-slate-200">{formatSize(swarmInfo.total_size)}</span>
                 </div>
                 <div className="col-span-2">
@@ -162,7 +162,7 @@ export const MagnetModal: React.FC<MagnetModalProps> = ({
                     onChange={(e) => setOptInSeeding(e.target.checked)}
                     className="rounded border-slate-700 bg-slate-800 text-cyan-500 focus:ring-0"
                   />
-                  <span className="text-[11px]">Bantu Seeding (Jadikan folder saya mirror publik setelah disalin)</span>
+                  <span className="text-[11px]">Help Seeding (Make my folder a public mirror after copying)</span>
                 </label>
               </div>
             </div>
@@ -174,21 +174,21 @@ export const MagnetModal: React.FC<MagnetModalProps> = ({
             onClick={onClose}
             className="px-4 py-2 rounded-lg text-xs font-semibold text-slate-400 hover:text-slate-200 hover:bg-slate-800 transition-colors"
           >
-            Tutup
+            Close
           </button>
 
           <button
             onClick={handleCopyToDrive}
             disabled={!swarmInfo || isCopying}
             className="flex items-center space-x-1.5 px-4 py-2 rounded-lg text-xs font-bold bg-emerald-600 hover:bg-emerald-500 text-white transition-all shadow-md shadow-emerald-600/30 disabled:opacity-50"
-            title="Salin shard langsung ke Google Drive Anda secara instan (Bypass kuota download)"
+            title="Copy shards directly to your Google Drive (Instant, bypasses download quota)"
           >
             {isCopying ? (
               <Loader2 className="w-3.5 h-3.5 animate-spin" />
             ) : (
               <CloudLightning className="w-3.5 h-3.5" />
             )}
-            <span>Salin ke Drive Saya (Instan)</span>
+            <span>Copy to My Drive (Instant)</span>
           </button>
 
           <button
@@ -197,7 +197,7 @@ export const MagnetModal: React.FC<MagnetModalProps> = ({
             className="flex items-center space-x-1.5 px-4 py-2 rounded-lg text-xs font-bold bg-cyan-600 hover:bg-cyan-500 text-white transition-all shadow-md shadow-cyan-600/30 disabled:opacity-50"
           >
             <Download className="w-3.5 h-3.5" />
-            <span>Unduh ke Komputer</span>
+            <span>Download to Computer</span>
           </button>
         </div>
       </div>

@@ -106,7 +106,7 @@ export function App() {
       const fileList = await api.listCatalogFiles();
       setFiles(fileList);
 
-      // Otomatis sinkronisasi catalog dari remote drive di background jika ada target drive
+      // Automatically synchronize catalog from remote drive in background if targets exist
       if (v && v.targets && v.targets.length > 0) {
         api.syncCatalog()
           .then(() => refreshFiles())

@@ -96,7 +96,7 @@ export const ExplorerView: React.FC<ExplorerViewProps> = ({
             <button
               onClick={onSync}
               disabled={isSyncing}
-              title="Sinkronisasi katalog manifest dari Google Drive"
+              title="Synchronize catalog manifests from Google Drive"
               className="flex items-center space-x-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-slate-950 hover:bg-slate-800 text-slate-300 border border-slate-800 hover:border-slate-700 transition-all shadow-sm disabled:opacity-50"
             >
               <RefreshCw className={`w-3.5 h-3.5 text-cyan-400 ${isSyncing ? 'animate-spin' : ''}`} />

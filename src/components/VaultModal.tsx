@@ -95,7 +95,7 @@ export const VaultModal: React.FC<VaultModalProps> = ({
         setErrorMsg(null);
       }
     } catch (err: any) {
-      setErrorMsg(err?.toString() || 'Gagal membaca file vault.json.');
+      setErrorMsg(err?.toString() || 'Failed to read vault.json file.');
     }
   };
 
@@ -112,7 +112,7 @@ export const VaultModal: React.FC<VaultModalProps> = ({
 
       if (importSourceType === 'file') {
         if (!importJsonContent.trim()) {
-          setErrorMsg('Silakan pilih file vault.json terlebih dahulu.');
+          setErrorMsg('Please select a vault.json file first.');
           setIsLoading(false);
           return;
         }
@@ -281,7 +281,7 @@ export const VaultModal: React.FC<VaultModalProps> = ({
                   ))}
                 </div>
                 <p className="text-[10px] text-slate-500 mt-1.5">
-                  * Untuk vault personal sederhana, 1 Folder ID utama sudah cukup. Jika ingin proteksi Reed-Solomon multi-drive, Anda dapat menambahkan drive cadangan.
+                  * For a basic personal vault, 1 primary Folder ID is sufficient. You can add extra drives for multi-drive Reed-Solomon protection.
                 </p>
               </div>
 
@@ -349,7 +349,7 @@ export const VaultModal: React.FC<VaultModalProps> = ({
                     )}
                   </div>
                   <p className="text-[10px] text-slate-500 mt-1">
-                    * Pilih file backup yang sebelumnya Anda simpan di harddisk/flashdisk.
+                    * Choose a backup file previously saved on your hard drive or USB drive.
                   </p>
                 </div>
               ) : (

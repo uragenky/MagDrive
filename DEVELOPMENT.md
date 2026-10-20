@@ -11,7 +11,7 @@ magdrive/
 ├── src/                               # Frontend (React 18 + TS + Tailwind)
 │   ├── assets/                        # Static icons and logos
 │   ├── components/                    # UI Component tree
-│   │   ├── ExplorerView.tsx           # Bank Data file listing, filtering, search
+│   │   ├── ExplorerView.tsx           # Data Bank file listing, filtering, search
 │   │   ├── HealthView.tsx             # Redundancy monitor & Self-healing rebuild
 │   │   ├── MagnetModal.tsx            # Magnet URI input and metadata preview
 │   │   ├── MembersView.tsx            # Google Permissions management & Token export

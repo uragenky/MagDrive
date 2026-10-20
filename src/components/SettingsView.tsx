@@ -202,7 +202,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
       const token = await api.exportVaultConfig(activeVault.id, 'admin');
       setExportedToken(token);
     } catch (err: any) {
-      setBackupError(typeof err === 'string' ? err : 'Gagal mengekspor token vault backup.');
+      setBackupError(typeof err === 'string' ? err : 'Failed to export vault backup token.');
     } finally {
       setIsExportingToken(false);
     }
@@ -216,10 +216,10 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     try {
       const savedPath = await api.saveVaultJsonToFile(activeVault.id);
       if (savedPath) {
-        setBackupSuccess(`File backup berhasil disimpan di: ${savedPath}`);
+        setBackupSuccess(`Backup file successfully saved to: ${savedPath}`);
       }
     } catch (err: any) {
-      setBackupError(typeof err === 'string' ? err : 'Gagal menyimpan file backup JSON.');
+      setBackupError(typeof err === 'string' ? err : 'Failed to save backup JSON file.');
     } finally {
       setIsSavingJsonFile(false);
     }
@@ -228,7 +228,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   const handleUploadVaultToDrive = async () => {
     if (!activeVault) return;
     const confirmUpload = window.confirm(
-      'File vault.json akan diunggah ke folder .magdrive/ di Google Drive Anda. Siapapun yang memiliki link folder Drive Anda dapat melihat nama vault dan struktur target (namun passphrase dan file Anda tetap aman terenkripsi). Lanjutkan?'
+      'The vault.json file will be uploaded to .magdrive/ in your Google Drive. Anyone with access to your shared Drive folder can view the vault name and target layout (passphrase and files remain securely encrypted). Continue?'
     );
     if (!confirmUpload) return;
 
@@ -239,7 +239,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
       const msg = await api.uploadVaultDescriptorToDrive(activeVault.id);
       setBackupSuccess(msg);
     } catch (err: any) {
-      setBackupError(typeof err === 'string' ? err : 'Gagal mengunggah vault.json ke Google Drive.');
+      setBackupError(typeof err === 'string' ? err : 'Failed to upload vault.json to Google Drive.');
     } finally {
       setIsUploadingToCloud(false);
     }
@@ -609,21 +609,21 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               <div>
                 <h3 className="text-sm font-bold text-slate-100">Multi-Tracker & Swarm Mirroring</h3>
                 <p className="text-[11px] text-slate-500">
-                  Daftar serverless tracker untuk penemuan peer (Google Drive mirror) dan koordinasi swarm.
+                  Serverless tracker list for peer discovery (Google Drive mirrors) and swarm coordination.
                 </p>
               </div>
             </div>
             {trackerSavedNotice && (
               <div className="flex items-center space-x-1 text-xs text-emerald-400">
                 <CheckCircle2 className="w-3.5 h-3.5" />
-                <span>Pengaturan Tracker Tersimpan!</span>
+                <span>Tracker Settings Saved!</span>
               </div>
             )}
           </div>
 
           <div className="space-y-3">
             <label className="text-xs font-semibold text-slate-300 block">
-              Daftar Tracker Aktif:
+              Active Trackers:
             </label>
             <div className="space-y-2">
               {trackers.map((tr, idx) => (
@@ -636,7 +636,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                     onClick={() => handleRemoveTracker(idx)}
                     disabled={trackers.length <= 1}
                     className="p-1 rounded text-slate-500 hover:text-rose-400 transition-colors disabled:opacity-30"
-                    title={trackers.length <= 1 ? 'Minimal harus ada 1 tracker' : 'Hapus tracker'}
+                    title={trackers.length <= 1 ? 'At least 1 tracker is required' : 'Remove tracker'}
                   >
                     <Trash2 className="w-3.5 h-3.5" />
                   </button>
@@ -644,11 +644,11 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               ))}
             </div>
 
-            {/* Tambah Tracker Input */}
+            {/* Add Tracker Input */}
             <div className="flex items-center space-x-2 pt-2">
               <input
                 type="text"
-                placeholder="https://tracker-anda.vercel.app/api"
+                placeholder="https://your-tracker.vercel.app/api"
                 value={newTrackerUrl}
                 onChange={(e) => setNewTrackerUrl(e.target.value)}
                 className="flex-1 bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 text-xs text-slate-200 placeholder-slate-600 focus:outline-none focus:border-cyan-500 font-mono"
@@ -659,7 +659,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                 className="flex items-center space-x-1.5 px-3 py-2 rounded-lg text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-cyan-400 border border-slate-700 transition-all disabled:opacity-50"
               >
                 <Plus className="w-3.5 h-3.5" />
-                <span>Tambah Tracker</span>
+                <span>Add Tracker</span>
               </button>
             </div>
 
@@ -667,10 +667,10 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
             <div className="pt-3 border-t border-slate-800/60 flex items-start justify-between">
               <div className="space-y-0.5">
                 <label htmlFor="defaultSeedingCheckbox" className="text-xs font-semibold text-slate-200 cursor-pointer">
-                  Otomatis bantu mirror publik saat menyalin (Default Opt-in Seeding)
+                  Automatically enable public mirror when copying (Default Opt-in Seeding)
                 </label>
                 <p className="text-[11px] text-slate-500">
-                  Saat diaktifkan, setiap file yang Anda salin ke Google Drive Anda akan otomatis disetel sebagai Public Viewer dan didaftarkan ke tracker untuk membantu pengguna lain.
+                  When enabled, copied files to your Google Drive will automatically be set to Public Viewer and announced to trackers to help other users.
                 </p>
               </div>
               <label className="relative inline-flex items-center cursor-pointer ml-4 mt-0.5">
@@ -691,7 +691,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                 disabled={isSavingTracker}
                 className="px-5 py-2 rounded-lg text-xs font-semibold bg-indigo-600 hover:bg-indigo-500 text-white transition-all shadow-md shadow-indigo-600/30 disabled:opacity-50"
               >
-                {isSavingTracker ? 'Menyimpan...' : 'Simpan Pengaturan Tracker'}
+                {isSavingTracker ? 'Saving...' : 'Save Tracker Settings'}
               </button>
             </div>
           </div>
@@ -803,7 +803,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                     Vault Backup & Device Migration (.magvault)
                   </h3>
                   <p className="text-[11px] text-slate-500">
-                    Cadangkan token konfigurasi terenkripsi untuk memindahkan atau memulihkan vault pribadi di perangkat lain.
+                    Back up encrypted configuration tokens or files to migrate or restore your vault on another machine.
                   </p>
                 </div>
               </div>
@@ -811,14 +811,14 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
 
             <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
               <p className="text-xs text-slate-400 max-w-lg">
-                Cadangkan konfigurasi vault Anda. Anda dapat menyimpannya sebagai file offline <code className="text-emerald-400">vault.json</code> di komputer, menyalin token teks, atau mengunggahnya ke Google Drive Anda.
+                Back up your vault configuration. You can save an offline <code className="text-emerald-400">vault.json</code> descriptor to your computer, copy the base64 token, or optionally upload it to Google Drive.
               </p>
               <div className="flex items-center space-x-2 shrink-0">
                 <button
                   onClick={handleSaveJsonBackup}
                   disabled={isSavingJsonFile}
                   className="flex items-center space-x-1.5 px-3 py-2 rounded-lg text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-slate-200 transition-all border border-slate-700 hover:border-slate-600 disabled:opacity-50"
-                  title="Simpan file vault.json ke flashdisk atau folder lokal"
+                  title="Save vault.json file to local storage or USB drive"
                 >
                   <FileText className="w-3.5 h-3.5 text-cyan-400" />
                   <span>{isSavingJsonFile ? 'Saving...' : 'Save vault.json'}</span>
@@ -835,7 +835,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   onClick={handleUploadVaultToDrive}
                   disabled={isUploadingToCloud}
                   className="flex items-center space-x-1.5 px-3 py-2 rounded-lg text-xs font-semibold bg-cyan-700/60 hover:bg-cyan-600/60 text-cyan-200 transition-all border border-cyan-500/30 disabled:opacity-50"
-                  title="Unggah vault.json ke folder .magdrive/ di Google Drive Anda (Opsional)"
+                  title="Upload vault.json descriptor to .magdrive/ on Google Drive (Optional)"
                 >
                   <CloudUpload className="w-3.5 h-3.5 text-cyan-300" />
                   <span>{isUploadingToCloud ? 'Uploading...' : 'Sync to Drive'}</span>
@@ -870,14 +870,14 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                     ) : (
                       <Copy className="w-3.5 h-3.5" />
                     )}
-                    <span>{tokenCopied ? 'Tersalin!' : 'Salin Token'}</span>
+                    <span>{tokenCopied ? 'Copied!' : 'Copy Token'}</span>
                   </button>
                 </div>
                 <div className="bg-slate-950 p-3 rounded-lg border border-slate-800 font-mono text-[10px] text-slate-300 break-all select-all max-h-28 overflow-y-auto">
                   {exportedToken}
                 </div>
                 <p className="text-[11px] text-slate-500 italic">
-                  * Untuk restore di komputer lain, buka menu daftar Vault &gt; tab Import Vault, lalu masukkan token ini beserta passphrase vault Anda.
+                  * To restore on another computer, open Vault Menu &gt; Import Vault tab, then provide this token along with your vault passphrase.
                 </p>
               </div>
             )}

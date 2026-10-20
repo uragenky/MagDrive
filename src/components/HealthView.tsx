@@ -34,7 +34,7 @@ export const HealthView: React.FC<HealthViewProps> = ({ activeVault, files, onRe
   if (!activeVault) {
     return (
       <div className="flex-1 flex items-center justify-center bg-slate-900 p-8 text-center text-slate-400">
-        Pilih atau buat Personal Vault untuk melihat status diagnostik penyimpanan.
+        Select or create a Personal Vault to view storage diagnostic status.
       </div>
     );
   }
@@ -48,7 +48,7 @@ export const HealthView: React.FC<HealthViewProps> = ({ activeVault, files, onRe
         <div>
           <h2 className="text-xl font-bold text-slate-100">Vault Health & Diagnostics</h2>
           <p className="text-xs text-slate-400 mt-1">
-            Pantau integritas shard lokal, target Google Drive pribadi, dan verifikasi manifest enkripsi.
+            Monitor local shard integrity, personal Google Drive targets, and verify encryption manifests.
           </p>
         </div>
 

@@ -67,7 +67,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
   const handleDelete = async (e: React.MouseEvent, vaultId: string, vaultName: string) => {
     e.stopPropagation();
-    if (confirm(`Hapus vault "${vaultName}" dari daftar aplikasi? (Data di Google Drive tidak akan terhapus)`)) {
+    if (confirm(`Remove vault "${vaultName}" from application list? (Data in Google Drive will not be deleted)`)) {
       await onDeleteVault(vaultId);
     }
   };
@@ -157,7 +157,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                         </div>
 
                         <button
-                          title="Hapus vault ini"
+                          title="Remove this vault"
                           onClick={(e) => handleDelete(e, v.id, v.name)}
                           className="opacity-0 group-hover:opacity-100 p-1 rounded hover:bg-rose-500/20 text-slate-400 hover:text-rose-400 transition-all shrink-0"
                         >
