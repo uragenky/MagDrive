@@ -3,7 +3,7 @@ use futures::StreamExt;
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use sha2::Digest;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Emitter, State};
@@ -1081,9 +1081,18 @@ pub async fn copy_shards_to_my_drive(
     }
 
     let client = get_drive_client(&state.db).await?;
-    let target = &vault.targets[0];
-    let magdrive_dir = ensure_cached_folder(&client, &state.folder_cache, &target.target_id, ".magdrive").await?;
-    let chunks_dir = ensure_cached_folder(&client, &state.folder_cache, &magdrive_dir, "chunks").await?;
+    let targets = &vault.targets;
+    let num_targets = targets.len();
+
+    // Ensure .magdrive and chunks folders exist across all configured vault targets
+    let mut resolved_chunks_dirs = Vec::new();
+    let mut resolved_magdrive_dirs = Vec::new();
+    for target in targets {
+        let magdrive_dir = ensure_cached_folder(&client, &state.folder_cache, &target.target_id, ".magdrive").await?;
+        let chunks_dir = ensure_cached_folder(&client, &state.folder_cache, &magdrive_dir, "chunks").await?;
+        resolved_magdrive_dirs.push(magdrive_dir);
+        resolved_chunks_dirs.push(chunks_dir);
+    }
 
     let mut chunk_refs = Vec::new();
     for stripe in &pkg.stripes {
@@ -1094,6 +1103,11 @@ pub async fn copy_shards_to_my_drive(
 
     let total_chunks = chunk_refs.len();
     let transfer_id = format!("cp_{}", Uuid::new_v4().simple());
+    let dest_label = if num_targets == 1 {
+        format!("Google Drive: {}", targets[0].label)
+    } else {
+        format!("Google Drive: {} targets (Balanced)", num_targets)
+    };
     let record = TransferRecord {
         id: transfer_id.clone(),
         package_id: package_id.clone(),
@@ -1103,7 +1117,7 @@ pub async fn copy_shards_to_my_drive(
         transferred_bytes: 0,
         status: "transferring".to_string(),
         error_message: None,
-        destination_path: Some(format!("Google Drive: {}", target.label)),
+        destination_path: Some(dest_label.clone()),
         updated_at: chrono::Utc::now().timestamp(),
     };
     let _ = state.db.upsert_transfer(&record);
@@ -1122,24 +1136,29 @@ pub async fn copy_shards_to_my_drive(
             "total_bytes": pkg.total_size,
             "speed_bps": 0,
             "eta_seconds": 0,
-            "target_label": format!("Server-side copying to {}", target.label),
+            "target_label": format!("Server-side copying to {}", dest_label),
             "status": "transferring"
         }),
     );
 
     let mut copied_count = 0;
-    let mut new_file_ids = HashMap::new();
+    // Map sha256 -> (new_file_id, chosen_target_id)
+    let mut new_file_mapping: HashMap<String, (String, String)> = HashMap::new();
 
     for (idx, chunk) in chunk_refs.iter().enumerate() {
+        let target_idx = chunk.shard_index % num_targets;
+        let chosen_target = &targets[target_idx];
+        let chunks_dir = &resolved_chunks_dirs[target_idx];
+
         let chunk_file_name = format!("chunk_{}_{}.bin", package_id, chunk.sha256);
         let copy_res = client
-            .copy_file(&chunk.file_id, &chunks_dir, Some(&chunk_file_name))
+            .copy_file(&chunk.file_id, chunks_dir, Some(&chunk_file_name))
             .await;
 
         match copy_res {
             Ok(created_item) => {
                 copied_count += 1;
-                new_file_ids.insert(chunk.sha256.clone(), created_item.id);
+                new_file_mapping.insert(chunk.sha256.clone(), (created_item.id, chosen_target.target_id.clone()));
                 let transferred = if total_chunks > 0 {
                     (pkg.total_size * copied_count as u64) / total_chunks as u64
                 } else {
@@ -1160,7 +1179,7 @@ pub async fn copy_shards_to_my_drive(
                         "total_bytes": pkg.total_size,
                         "speed_bps": 0,
                         "eta_seconds": 0,
-                        "target_label": format!("Copied shard {}/{} to My Drive...", copied_count, total_chunks),
+                        "target_label": format!("Copied shard {}/{} to {}...", copied_count, total_chunks, chosen_target.label),
                         "status": "transferring"
                     }),
                 );
@@ -1173,13 +1192,13 @@ pub async fn copy_shards_to_my_drive(
         }
     }
 
-    // Clone and update manifest with newly copied local chunk file IDs
+    // Clone and update manifest with newly copied local chunk file IDs and balanced target IDs
     let mut updated_manifest = pkg.clone();
     for stripe in &mut updated_manifest.stripes {
         for chunk in &mut stripe.chunks {
-            if let Some(new_id) = new_file_ids.get(&chunk.sha256) {
+            if let Some((new_id, new_target_id)) = new_file_mapping.get(&chunk.sha256) {
                 chunk.file_id = new_id.clone();
-                chunk.target_id = target.target_id.clone();
+                chunk.target_id = new_target_id.clone();
             }
         }
     }
@@ -1187,7 +1206,7 @@ pub async fn copy_shards_to_my_drive(
     // Save updated manifest in local database
     let _ = state.db.upsert_package(&vault_id, &updated_manifest);
 
-    // Resolve vault master key to re-encrypt manifest into target's .magdrive/metadata/
+    // Resolve vault master key to re-encrypt manifest into all targets' .magdrive/metadata/
     let master_key_opt = {
         let lock = state.key_cache.lock().unwrap();
         lock.get(&vault.id).copied().or_else(|| {
@@ -1198,23 +1217,34 @@ pub async fn copy_shards_to_my_drive(
     };
 
     if let Some(mk) = master_key_opt {
-        // Upload re-encrypted manifest to recipient vault's .magdrive/metadata/ folder
         if let Ok(meta_bytes) = updated_manifest.encrypt(&mk) {
             let meta_file_name = format!("meta_{}.enc", package_id);
-            if let Ok(meta_dir) = ensure_cached_folder(&client, &state.folder_cache, &magdrive_dir, "metadata").await {
-                let _ = client.upload_file(&meta_dir, &meta_file_name, &meta_bytes).await;
+            for magdrive_dir in &resolved_magdrive_dirs {
+                if let Ok(meta_dir) = ensure_cached_folder(&client, &state.folder_cache, magdrive_dir, "metadata").await {
+                    let _ = client.upload_file(&meta_dir, &meta_file_name, &meta_bytes).await;
+                }
             }
         }
     }
 
     if opt_in_seeding {
-        let _ = client.set_folder_public_viewer(&target.target_id).await;
+        // Collect unique target IDs that actually store shards
+        let mut seeded_targets = HashSet::new();
+        for (_, target_id) in new_file_mapping.values() {
+            seeded_targets.insert(target_id.clone());
+        }
+
         let trackers = get_tracker_urls_from_db(&state.db);
         let topic = calculate_blind_topic(&package_id);
-        let target_id = target.target_id.clone();
-        tokio::spawn(async move {
-            announce_to_trackers(&trackers, &topic, &target_id, false).await;
-        });
+
+        for target_id in seeded_targets {
+            let _ = client.set_folder_public_viewer(&target_id).await;
+            let trackers_clone = trackers.clone();
+            let topic_clone = topic.clone();
+            tokio::spawn(async move {
+                announce_to_trackers(&trackers_clone, &topic_clone, &target_id, false).await;
+            });
+        }
     }
 
     let _ = state.db.update_transfer_status(&transfer_id, "completed", None);
@@ -1236,7 +1266,7 @@ pub async fn copy_shards_to_my_drive(
         }),
     );
 
-    Ok(format!("Successfully copied all {} shards to {}", total_chunks, target.label))
+    Ok(format!("Successfully copied all {} shards to {}", total_chunks, dest_label))
 }
 
 #[tauri::command]
