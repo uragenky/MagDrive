@@ -52,9 +52,48 @@ pub struct DriveAboutUser {
     pub email_address: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DriveStorageQuota {
+    pub limit: Option<String>,
+    pub usage: Option<String>,
+    pub usage_in_drive: Option<String>,
+    pub usage_in_drive_trash: Option<String>,
+}
+
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct DriveAboutResponse {
-    user: DriveAboutUser,
+    pub user: DriveAboutUser,
+    pub storage_quota: Option<DriveStorageQuota>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SharedDriveItem {
+    pub id: String,
+    pub name: String,
+    pub can_add_children: bool,
+}
+
+#[derive(Debug, Deserialize)]
+struct SharedDriveListResponse {
+    #[serde(default)]
+    drives: Vec<SharedDriveRawItem>,
+}
+
+#[derive(Debug, Deserialize)]
+struct SharedDriveRawItem {
+    id: String,
+    name: String,
+    capabilities: Option<SharedDriveCapabilities>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SharedDriveCapabilities {
+    #[serde(default)]
+    can_add_children: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -70,6 +109,7 @@ pub struct DriveClient {
     pub refresh_token: Option<String>,
     pub credentials: Option<GcpCredentials>,
     pub db: Option<Database>,
+    pub account_email: Option<String>,
 }
 
 fn create_optimized_http_client() -> reqwest::Client {
@@ -92,6 +132,7 @@ impl DriveClient {
             refresh_token: None,
             credentials: None,
             db: None,
+            account_email: None,
         }
     }
 
@@ -108,6 +149,25 @@ impl DriveClient {
             refresh_token,
             credentials,
             db,
+            account_email: None,
+        }
+    }
+
+    pub fn for_account(
+        email: String,
+        access_token: String,
+        refresh_token: Option<String>,
+        credentials: Option<GcpCredentials>,
+        db: Option<Database>,
+    ) -> Self {
+        let client = create_optimized_http_client();
+        Self {
+            client,
+            access_token: Arc::new(Mutex::new(access_token)),
+            refresh_token,
+            credentials,
+            db,
+            account_email: Some(email),
         }
     }
 
@@ -134,11 +194,15 @@ impl DriveClient {
                         *lock = new_tokens.access_token.clone();
                     }
                     if let Some(ref db) = self.db {
-                        let _ = db.set_setting("access_token", &new_tokens.access_token);
                         let new_expires_at = chrono::Utc::now().timestamp() + new_tokens.expires_in as i64;
-                        let _ = db.set_setting("token_expires_at", &new_expires_at.to_string());
-                        if let Some(ref new_rt) = new_tokens.refresh_token {
-                            let _ = db.set_setting("refresh_token", new_rt);
+                        if let Some(ref email) = self.account_email {
+                            let _ = db.update_account_tokens(email, &new_tokens.access_token, new_expires_at);
+                        } else {
+                            let _ = db.set_setting("access_token", &new_tokens.access_token);
+                            let _ = db.set_setting("token_expires_at", &new_expires_at.to_string());
+                            if let Some(ref new_rt) = new_tokens.refresh_token {
+                                let _ = db.set_setting("refresh_token", new_rt);
+                            }
                         }
                     }
                     return true;
@@ -609,7 +673,13 @@ impl DriveClient {
 
     /// Fetches the authenticated user's profile info (display name and email address)
     pub async fn get_user_profile(&self) -> Result<DriveAboutUser, DriveError> {
-        let url = "https://www.googleapis.com/drive/v3/about?fields=user(displayName,emailAddress)";
+        let (user, _) = self.get_storage_quota().await?;
+        Ok(user)
+    }
+
+    /// Fetches the authenticated user's profile and storage quota info
+    pub async fn get_storage_quota(&self) -> Result<(DriveAboutUser, Option<DriveStorageQuota>), DriveError> {
+        let url = "https://www.googleapis.com/drive/v3/about?fields=user(displayName,emailAddress),storageQuota(limit,usage,usageInDrive,usageInDriveTrash)";
 
         let mut res = self
             .client
@@ -630,7 +700,52 @@ impl DriveClient {
         let status = res.status();
         if status.is_success() {
             let about: DriveAboutResponse = res.json().await?;
-            Ok(about.user)
+            Ok((about.user, about.storage_quota))
+        } else {
+            let msg = res.text().await.unwrap_or_default();
+            Err(DriveError::ApiError {
+                status: status.as_u16(),
+                message: msg,
+            })
+        }
+    }
+
+    /// Finds or automatically creates the dedicated "MagDrive Storage" folder at the root of the user's Google Drive
+    pub async fn find_or_create_magdrive_folder(&self) -> Result<String, DriveError> {
+        self.ensure_folder("root", "MagDrive Storage").await
+    }
+
+    /// Lists Google Workspace Shared Drives that this account has access to
+    pub async fn list_shared_drives(&self) -> Result<Vec<SharedDriveItem>, DriveError> {
+        let url = "https://www.googleapis.com/drive/v3/drives?pageSize=100&fields=drives(id,name,capabilities(canAddChildren))";
+
+        let mut res = self
+            .client
+            .get(url)
+            .headers(self.auth_headers())
+            .send()
+            .await?;
+
+        if res.status().as_u16() == 401 && self.try_refresh_token().await {
+            res = self
+                .client
+                .get(url)
+                .headers(self.auth_headers())
+                .send()
+                .await?;
+        }
+
+        let status = res.status();
+        if status.is_success() {
+            let list: SharedDriveListResponse = res.json().await?;
+            let items = list.drives.into_iter().map(|d| {
+                SharedDriveItem {
+                    id: d.id,
+                    name: d.name,
+                    can_add_children: d.capabilities.map(|c| c.can_add_children).unwrap_or(true),
+                }
+            }).collect();
+            Ok(items)
         } else {
             let msg = res.text().await.unwrap_or_default();
             Err(DriveError::ApiError {

@@ -1,7 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import {
   Key,
-  Globe,
   CheckCircle2,
   AlertCircle,
   HardDrive,
@@ -22,6 +21,12 @@ import {
   Info,
   ArrowLeftRight,
   Loader2,
+  RefreshCw,
+  Users,
+  Folder,
+  FolderPlus,
+  ChevronDown,
+  ChevronUp,
   X,
 } from 'lucide-react';
 import { openUrl } from '@tauri-apps/plugin-opener';
@@ -29,11 +34,13 @@ import { listen } from '@tauri-apps/api/event';
 import {
   VaultRecord,
   VaultTarget,
-  GoogleUserProfile,
   AdaptiveErasureInfo,
   TargetMigrationStats,
   MigrationProgressPayload,
   TargetMigrationResult,
+  TargetStorageUsage,
+  GoogleAccountInfo,
+  SharedDriveItem,
 } from '../types';
 import { api } from '../services/api';
 
@@ -48,9 +55,14 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
 }) => {
   const [clientId, setClientId] = useState('');
   const [clientSecret, setClientSecret] = useState('');
-  const [isLoggedIn, setIsLoggedIn] = useState(false);
-  const [userProfile, setUserProfile] = useState<GoogleUserProfile | null>(null);
-  const [isLoadingProfile, setIsLoadingProfile] = useState(false);
+  const [targetUsageMap, setTargetUsageMap] = useState<Record<string, TargetStorageUsage>>({});
+  const [googleAccounts, setGoogleAccounts] = useState<GoogleAccountInfo[]>([]);
+  const [isLoadingAccounts, setIsLoadingAccounts] = useState(false);
+  const [sharedDrivesMap, setSharedDrivesMap] = useState<Record<string, SharedDriveItem[]>>({});
+  const [loadingDrivesEmail, setLoadingDrivesEmail] = useState<string | null>(null);
+  const [openSharedDrivesEmail, setOpenSharedDrivesEmail] = useState<string | null>(null);
+  const [selectedSharedDrive, setSelectedSharedDrive] = useState<Record<string, string>>({});
+  const [showManualAddTarget, setShowManualAddTarget] = useState(false);
   const [statusMsg, setStatusMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(
     null
   );
@@ -104,24 +116,117 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
 
   const jsonFileInputRef = useRef<HTMLInputElement>(null);
 
+  const formatBytes = (bytes: number, decimals = 2): string => {
+    if (bytes === 0) return '0 B';
+    const k = 1024;
+    const dm = decimals < 0 ? 0 : decimals;
+    const sizes = ['B', 'KB', 'MB', 'GB', 'TB', 'PB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(dm)) + ' ' + sizes[i];
+  };
+
+  const fetchTargetUsage = async () => {
+    if (!activeVault) return;
+    try {
+      const usages = await api.getVaultTargetsUsage(activeVault.id);
+      const map: Record<string, TargetStorageUsage> = {};
+      for (const u of usages) {
+        map[u.targetId] = u;
+      }
+      setTargetUsageMap(map);
+    } catch (err) {
+      console.error('Failed to fetch target storage usage:', err);
+    }
+  };
+
+  const fetchGoogleAccounts = async () => {
+    setIsLoadingAccounts(true);
+    try {
+      const accs = await api.listGoogleAccounts();
+      setGoogleAccounts(accs);
+    } catch (err) {
+      console.error('Failed to list Google accounts:', err);
+    } finally {
+      setIsLoadingAccounts(false);
+    }
+  };
+
+  const handleRemoveAccount = async (email: string) => {
+    try {
+      await api.removeGoogleAccount(email);
+      await fetchGoogleAccounts();
+      setStatusMsg({ type: 'success', text: `Account ${email} disconnected from pool.` });
+    } catch (err: any) {
+      setStatusMsg({ type: 'error', text: err?.toString() || 'Failed to remove account' });
+    }
+  };
+
+  const handleToggleSharedDrives = async (email: string) => {
+    if (openSharedDrivesEmail === email) {
+      setOpenSharedDrivesEmail(null);
+      return;
+    }
+    setOpenSharedDrivesEmail(email);
+
+    if (!sharedDrivesMap[email]) {
+      setLoadingDrivesEmail(email);
+      try {
+        const drives = await api.listAccessibleSharedDrives(email);
+        setSharedDrivesMap((prev) => ({ ...prev, [email]: drives }));
+        if (drives.length > 0 && !selectedSharedDrive[email]) {
+          setSelectedSharedDrive((prev) => ({ ...prev, [email]: drives[0].id }));
+        }
+      } catch (err: any) {
+        console.error('Failed to list shared drives:', err);
+      } finally {
+        setLoadingDrivesEmail(null);
+      }
+    }
+  };
+
+  const handleAutoAddAccountTarget = async (email: string) => {
+    if (!activeVault) return;
+    try {
+      const updated = await api.autoAddAccountTarget(activeVault.id, email);
+      setTargets(updated.targets);
+      await onUpdateVaultTargets(updated.targets);
+      fetchTargetUsage();
+      setStatusMsg({ type: 'success', text: `Target folder for ${email} added to vault!` });
+    } catch (err: any) {
+      setStatusMsg({ type: 'error', text: err?.toString() || 'Failed to add target' });
+    }
+  };
+
+  const handleAddSharedDriveTarget = async (email: string) => {
+    if (!activeVault) return;
+    const driveId = selectedSharedDrive[email];
+    if (!driveId) return;
+    const driveItem = sharedDrivesMap[email]?.find((d) => d.id === driveId);
+    const driveName = driveItem ? driveItem.name : 'Shared Drive';
+
+    try {
+      const updated = await api.addSharedDriveTarget(activeVault.id, email, driveId, driveName);
+      setTargets(updated.targets);
+      await onUpdateVaultTargets(updated.targets);
+      fetchTargetUsage();
+      setStatusMsg({ type: 'success', text: `Shared Drive "${driveName}" added to vault!` });
+    } catch (err: any) {
+      setStatusMsg({ type: 'error', text: err?.toString() || 'Failed to add Shared Drive' });
+    }
+  };
+
   useEffect(() => {
     loadSettings();
 
     // Listen for OAuth success event to update login status reactively
     let unlisten: (() => void) | undefined;
     listen('oauth-success', () => {
-      setIsLoggedIn(true);
       setAuthUrlManual(null);
       setStatusMsg({
         type: 'success',
-        text: 'Google account authenticated and connected successfully!',
+        text: 'Google account authenticated and added to pool successfully!',
       });
-      setIsLoadingProfile(true);
-      api
-        .getGoogleUserProfile()
-        .then((profile) => setUserProfile(profile))
-        .catch((e) => console.error(e))
-        .finally(() => setIsLoadingProfile(false));
+      fetchGoogleAccounts();
     }).then((fn) => {
       unlisten = fn;
     });
@@ -134,6 +239,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   useEffect(() => {
     if (activeVault) {
       setTargets(activeVault.targets);
+      fetchTargetUsage();
     }
   }, [activeVault]);
 
@@ -164,18 +270,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
         setClientId(gcp.client_id);
         setClientSecret(gcp.client_secret);
       }
-      const logged = await api.checkLoginStatus();
-      setIsLoggedIn(logged);
-      if (logged) {
-        setIsLoadingProfile(true);
-        api
-          .getGoogleUserProfile()
-          .then((profile) => setUserProfile(profile))
-          .catch((e) => console.error(e))
-          .finally(() => setIsLoadingProfile(false));
-      } else {
-        setUserProfile(null);
-      }
+      await fetchGoogleAccounts();
 
       const dlSettings = await api.getDownloadSettings();
       if (dlSettings) {
@@ -395,10 +490,10 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
 
   const handleLogout = async () => {
     await api.logoutGoogle();
-    setIsLoggedIn(false);
-    setUserProfile(null);
+    setTargetUsageMap({});
     setAuthUrlManual(null);
-    setStatusMsg({ type: 'success', text: 'Successfully disconnected from Google account.' });
+    await fetchGoogleAccounts();
+    setStatusMsg({ type: 'success', text: 'All active sessions disconnected.' });
   };
 
   const handleAddTarget = () => {
@@ -425,6 +520,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     try {
       setIsSavingTargets(true);
       await onUpdateVaultTargets(targets);
+      fetchTargetUsage();
       setStatusMsg({ type: 'success', text: 'Vault storage targets updated successfully.' });
     } catch (err: any) {
       setStatusMsg({ type: 'error', text: err?.toString() || 'Failed to update storage targets.' });
@@ -502,6 +598,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
         if (updated) {
           setTargets(updated.targets);
           await onUpdateVaultTargets(updated.targets);
+          fetchTargetUsage();
         }
       }
     } catch (err: any) {
@@ -607,61 +704,53 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
           </form>
         </div>
 
-        {/* Section 2: Google Account Auth */}
-        <div className="bg-slate-950 border border-slate-800 rounded-2xl p-6 space-y-4">
-          <div className="flex items-center space-x-2 border-b border-slate-800/80 pb-3">
-            <Globe className="w-5 h-5 text-emerald-400" />
-            <h3 className="text-sm font-bold text-slate-100">Google Drive Authentication Status</h3>
-          </div>
-
-          <div className="flex items-center justify-between">
-            <div className="flex items-center space-x-3">
-              <div
-                className={`w-3 h-3 rounded-full shrink-0 ${
-                  isLoggedIn ? 'bg-emerald-400 shadow-lg shadow-emerald-400/50' : 'bg-slate-600'
-                }`}
-              />
-              <div className="flex flex-col">
-                <span className="text-xs font-medium text-slate-200">
-                  {isLoggedIn ? 'Google Account Connected' : 'Not Connected'}
-                </span>
-                {isLoggedIn && userProfile && (
-                  <div className="flex items-center space-x-2 mt-0.5">
-                    <span className="text-xs font-semibold text-white">
-                      {userProfile.displayName}
-                    </span>
-                    <span className="text-[11px] text-slate-400 font-mono">
-                      ({userProfile.emailAddress})
-                    </span>
-                  </div>
-                )}
-                {isLoggedIn && !userProfile && isLoadingProfile && (
-                  <span className="text-[11px] text-slate-500 mt-0.5">Loading account info...</span>
-                )}
+        {/* Section 2: Google Accounts & Multi-Tenant Storage Pool */}
+        <div className="bg-slate-950 border border-slate-800 rounded-2xl p-6 space-y-5">
+          <div className="flex items-center justify-between border-b border-slate-800/80 pb-3">
+            <div className="flex items-center space-x-2">
+              <Users className="w-5 h-5 text-emerald-400" />
+              <div>
+                <h3 className="text-sm font-bold text-slate-100">Google Accounts & Multi-Tenant Storage Pool</h3>
+                <p className="text-[11px] text-slate-400 mt-0.5">
+                  Connect multiple Google accounts. Each account uploads its designated shards independently, pooling 15 GB quotas together without penalizing a single account.
+                </p>
               </div>
             </div>
-
-            {isLoggedIn ? (
+            <div className="flex items-center space-x-2">
               <button
-                onClick={handleLogout}
-                className="px-4 py-2 rounded-lg text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-rose-400 border border-slate-700 transition-all"
+                type="button"
+                onClick={fetchGoogleAccounts}
+                disabled={isLoadingAccounts}
+                title="Refresh accounts & storage quotas"
+                className="flex items-center space-x-1.5 px-3 py-2 rounded-lg text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-cyan-400 border border-slate-700 transition-all disabled:opacity-50"
               >
-                Disconnect (Logout)
+                <RefreshCw className={`w-3.5 h-3.5 ${isLoadingAccounts ? 'animate-spin text-cyan-400' : ''}`} />
+                <span>{isLoadingAccounts ? 'Refreshing...' : 'Refresh'}</span>
               </button>
-            ) : (
+              {googleAccounts.length > 0 && (
+                <button
+                  type="button"
+                  onClick={handleLogout}
+                  title="Disconnect all accounts"
+                  className="px-3 py-2 rounded-lg text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-rose-400 border border-slate-700 transition-all"
+                >
+                  Disconnect All
+                </button>
+              )}
               <button
                 onClick={handleConnectGoogle}
                 disabled={!clientId.trim()}
-                className="px-5 py-2.5 rounded-lg text-xs font-semibold bg-cyan-600 hover:bg-cyan-500 text-white transition-all shadow-md shadow-cyan-600/30 disabled:opacity-50"
+                className="flex items-center space-x-1.5 px-3.5 py-2 rounded-lg text-xs font-semibold bg-cyan-600 hover:bg-cyan-500 text-white transition-all shadow-md shadow-cyan-600/30 disabled:opacity-50"
               >
-                Connect with Google (OAuth 2.0 PKCE)
+                <Plus className="w-3.5 h-3.5" />
+                <span>+ Connect Google Account</span>
               </button>
-            )}
+            </div>
           </div>
 
           {/* Manual Link Fallback */}
-          {authUrlManual && !isLoggedIn && (
-            <div className="mt-4 p-4 rounded-xl bg-slate-900 border border-cyan-500/30 space-y-3">
+          {authUrlManual && (
+            <div className="p-4 rounded-xl bg-slate-900 border border-cyan-500/30 space-y-3">
               <div className="flex items-start justify-between">
                 <div>
                   <h4 className="text-xs font-bold text-cyan-300">Browser Did Not Open Automatically?</h4>
@@ -692,6 +781,236 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                 value={authUrlManual}
                 className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-1.5 text-[11px] text-slate-400 font-mono select-all focus:outline-none"
               />
+            </div>
+          )}
+
+          {/* Connected Accounts List */}
+          {googleAccounts.length === 0 ? (
+            <div className="text-center py-8 border border-dashed border-slate-800 rounded-xl space-y-3">
+              <div className="w-12 h-12 rounded-full bg-slate-900 flex items-center justify-center mx-auto text-slate-500">
+                <Users className="w-6 h-6" />
+              </div>
+              <div>
+                <p className="text-xs font-semibold text-slate-300">No Google Accounts Connected Yet</p>
+                <p className="text-[11px] text-slate-500 max-w-sm mx-auto mt-0.5">
+                  Authenticate your first Google account using OAuth 2.0 PKCE. MagDrive will automatically create a dedicated <strong>"MagDrive Storage"</strong> folder on each account.
+                </p>
+              </div>
+              <button
+                onClick={handleConnectGoogle}
+                disabled={!clientId.trim()}
+                className="inline-flex items-center space-x-1.5 px-4 py-2 rounded-lg text-xs font-semibold bg-cyan-600 hover:bg-cyan-500 text-white transition-all shadow-md shadow-cyan-600/30 disabled:opacity-50"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                <span>Connect Account with Google</span>
+              </button>
+            </div>
+          ) : (
+            <div className="space-y-4">
+              {googleAccounts.map((acc) => {
+                const isTargetAdded = activeVault?.targets.some(
+                  (t) => t.account_email === acc.email || (acc.rootFolderId && t.target_id === acc.rootFolderId)
+                );
+                const drives = sharedDrivesMap[acc.email] || [];
+                const isDrivesOpen = openSharedDrivesEmail === acc.email;
+                const isLoadingDrives = loadingDrivesEmail === acc.email;
+
+                return (
+                  <div
+                    key={acc.email}
+                    className="bg-slate-900 border border-slate-800 rounded-xl p-4 space-y-3 hover:border-slate-700/80 transition-all"
+                  >
+                    {/* Account Header */}
+                    <div className="flex items-start justify-between">
+                      <div className="flex items-center space-x-3">
+                        <div className="w-9 h-9 rounded-full bg-gradient-to-br from-cyan-600 to-indigo-600 text-white flex items-center justify-center font-bold text-sm shadow-md shadow-cyan-500/20">
+                          {acc.displayName.charAt(0).toUpperCase()}
+                        </div>
+                        <div>
+                          <div className="flex items-center space-x-2">
+                            <span className="text-xs font-bold text-white">{acc.displayName}</span>
+                            <span className="text-[10px] text-emerald-400 font-mono bg-emerald-950/80 border border-emerald-800/60 px-1.5 py-0.2 rounded">
+                              Connected
+                            </span>
+                          </div>
+                          <span className="text-[11px] text-slate-400 font-mono block">
+                            {acc.email}
+                          </span>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center space-x-1.5">
+                        <button
+                          onClick={() => handleRemoveAccount(acc.email)}
+                          title="Disconnect account"
+                          className="px-2.5 py-1 text-[11px] font-semibold text-rose-400 hover:bg-rose-950/30 border border-slate-800 hover:border-rose-900/50 rounded-lg transition-colors"
+                        >
+                          Disconnect
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Storage Quota Progress */}
+                    <div className="bg-slate-950/70 border border-slate-800/80 rounded-lg p-3 space-y-2">
+                      <div className="flex items-center justify-between text-xs">
+                        {acc.isUnlimited ? (
+                          <>
+                            <span className="text-slate-400">Storage Capacity:</span>
+                            <span className="font-semibold text-emerald-400">
+                              Unlimited Workspace Pooled ({formatBytes(acc.usageBytes)} used)
+                            </span>
+                          </>
+                        ) : (
+                          <>
+                            <span className="text-slate-300 font-medium">
+                              {formatBytes(acc.usageBytes)} of {formatBytes(acc.limitBytes || 0)} used
+                              {acc.usagePercentage !== undefined && (
+                                <span className="text-slate-400 ml-1 font-mono">
+                                  ({acc.usagePercentage.toFixed(1)}%)
+                                </span>
+                              )}
+                            </span>
+                            <span className="font-semibold text-emerald-400">
+                              {formatBytes(acc.freeBytes || 0)} remaining
+                            </span>
+                          </>
+                        )}
+                      </div>
+
+                      {!acc.isUnlimited && (
+                        <div className="w-full bg-slate-900 rounded-full h-2 overflow-hidden border border-slate-800 flex">
+                          <div
+                            className={`h-full transition-all duration-500 rounded-full ${
+                              (acc.usagePercentage || 0) > 90
+                                ? 'bg-rose-500 shadow-sm shadow-rose-500/50'
+                                : (acc.usagePercentage || 0) > 75
+                                ? 'bg-amber-400 shadow-sm shadow-amber-400/50'
+                                : 'bg-gradient-to-r from-cyan-500 to-emerald-400'
+                            }`}
+                            style={{ width: `${Math.min(acc.usagePercentage || 0, 100)}%` }}
+                          />
+                        </div>
+                      )}
+
+                      <div className="grid grid-cols-3 gap-2 pt-1 text-[10px]">
+                        <div className="bg-slate-900/60 rounded p-1 text-center">
+                          <span className="text-slate-500 block">Drive Files</span>
+                          <span className="text-slate-300 font-mono">{formatBytes(acc.usageInDriveBytes)}</span>
+                        </div>
+                        <div className="bg-slate-900/60 rounded p-1 text-center">
+                          <span className="text-slate-500 block">Drive Trash</span>
+                          <span className="text-slate-300 font-mono">{formatBytes(acc.usageInTrashBytes)}</span>
+                        </div>
+                        <div className="bg-slate-900/60 rounded p-1 text-center">
+                          <span className="text-slate-500 block">Mail/Photos</span>
+                          <span className="text-slate-300 font-mono">
+                            {formatBytes(Math.max(0, acc.usageBytes - acc.usageInDriveBytes))}
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Auto Folder & 1-Click Vault Actions */}
+                    <div className="pt-1 flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-t border-slate-800/60">
+                      <div className="flex items-center space-x-1.5 text-[11px] text-slate-400">
+                        <Folder className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
+                        <span>
+                          Dedicated Folder: <strong className="text-slate-200">MagDrive Storage</strong>
+                          {acc.rootFolderId && (
+                            <span className="text-[10px] font-mono text-slate-500 ml-1">
+                              ({acc.rootFolderId})
+                            </span>
+                          )}
+                        </span>
+                      </div>
+
+                      <div className="flex items-center space-x-2">
+                        {/* Auto Personal Target Button */}
+                        <button
+                          onClick={() => handleAutoAddAccountTarget(acc.email)}
+                          disabled={!activeVault || isTargetAdded}
+                          className={`flex items-center space-x-1 px-2.5 py-1.5 rounded-lg text-xs font-semibold transition-all ${
+                            isTargetAdded
+                              ? 'bg-slate-800/80 text-emerald-400 border border-emerald-900/40 cursor-default'
+                              : 'bg-cyan-600/20 hover:bg-cyan-600/30 text-cyan-300 border border-cyan-500/40 hover:border-cyan-500/60'
+                          }`}
+                        >
+                          {isTargetAdded ? (
+                            <>
+                              <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
+                              <span>Added to Vault</span>
+                            </>
+                          ) : (
+                            <>
+                              <FolderPlus className="w-3.5 h-3.5" />
+                              <span>+ Add to Vault (Auto Folder)</span>
+                            </>
+                          )}
+                        </button>
+
+                        {/* Toggle Shared Drives */}
+                        <button
+                          onClick={() => handleToggleSharedDrives(acc.email)}
+                          className="flex items-center space-x-1 px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 transition-all"
+                        >
+                          <HardDrive className="w-3.5 h-3.5 text-indigo-400" />
+                          <span>Shared Drives</span>
+                          {isDrivesOpen ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Shared Drives Drawer */}
+                    {isDrivesOpen && (
+                      <div className="mt-2 p-3 rounded-lg bg-slate-950 border border-indigo-950/60 space-y-2">
+                        <div className="flex items-center justify-between">
+                          <span className="text-[11px] font-bold text-slate-300">
+                            Accessible Google Workspace Shared Drives
+                          </span>
+                          {isLoadingDrives && (
+                            <span className="text-[10px] text-slate-500 flex items-center space-x-1">
+                              <Loader2 className="w-3 h-3 animate-spin" />
+                              <span>Scanning drives...</span>
+                            </span>
+                          )}
+                        </div>
+
+                        {drives.length === 0 && !isLoadingDrives ? (
+                          <p className="text-[11px] text-slate-500 py-1">
+                            No Google Workspace Shared Drives found for this account.
+                          </p>
+                        ) : (
+                          <div className="flex items-center space-x-2">
+                            <select
+                              value={selectedSharedDrive[acc.email] || (drives[0]?.id || '')}
+                              onChange={(e) =>
+                                setSelectedSharedDrive((prev) => ({
+                                  ...prev,
+                                  [acc.email]: e.target.value,
+                                }))
+                              }
+                              className="flex-1 bg-slate-900 border border-slate-800 rounded-lg px-3 py-1.5 text-xs text-slate-200 focus:outline-none focus:border-indigo-500"
+                            >
+                              {drives.map((d) => (
+                                <option key={d.id} value={d.id}>
+                                  {d.name} {d.canAddChildren ? '(Writable)' : '(Read Only)'}
+                                </option>
+                              ))}
+                            </select>
+                            <button
+                              onClick={() => handleAddSharedDriveTarget(acc.email)}
+                              disabled={!activeVault || drives.length === 0}
+                              className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-indigo-600 hover:bg-indigo-500 text-white transition-all disabled:opacity-50"
+                            >
+                              Add Drive to Vault
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
             </div>
           )}
         </div>
@@ -968,9 +1287,21 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                       {idx + 1}
                     </span>
                     <div>
-                      <div className="font-semibold text-slate-200">{t.label}</div>
-                      <div className="text-[10px] text-slate-500 font-mono">
-                        {t.target_type === 'SharedDrive' ? 'Google Workspace Shared Drive' : 'Personal Shared Folder'} • ID: {t.target_id}
+                      <div className="font-semibold text-slate-200 flex items-center space-x-2">
+                        <span>{t.label}</span>
+                        {t.account_email && (
+                          <span className="text-[10px] font-mono bg-emerald-950/80 text-emerald-400 border border-emerald-800/60 px-1.5 py-0.2 rounded">
+                            Owner: {t.account_email}
+                          </span>
+                        )}
+                      </div>
+                      <div className="text-[10px] text-slate-500 font-mono flex items-center space-x-1.5 flex-wrap mt-0.5">
+                        <span>{t.target_type === 'SharedDrive' ? 'Google Workspace Shared Drive' : 'Personal Shared Folder'} • ID: {t.target_id}</span>
+                        {targetUsageMap[t.target_id] && (
+                          <span className="text-cyan-400 font-medium bg-slate-950/80 px-1.5 py-0.5 rounded border border-slate-800">
+                            {targetUsageMap[t.target_id].chunkCount} shards ({formatBytes(targetUsageMap[t.target_id].totalBytes)})
+                          </span>
+                        )}
                       </div>
                     </div>
                   </div>
@@ -995,45 +1326,58 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               ))}
             </div>
 
-            {/* Add Target Input */}
+            {/* Add Target Input (Collapsible for manual entry) */}
             <div className="pt-2 border-t border-slate-800/60 space-y-3">
-              <span className="text-xs font-semibold text-slate-400 block">
-                Add New Storage Target (Drive or Folder)
-              </span>
-              <div className="grid grid-cols-3 gap-2">
-                <input
-                  type="text"
-                  placeholder="Label (e.g., Primary Drive)"
-                  value={newTargetLabel}
-                  onChange={(e) => setNewTargetLabel(e.target.value)}
-                  className="bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 text-xs text-slate-200 placeholder-slate-600 focus:outline-none focus:border-cyan-500"
-                />
-                <select
-                  value={newTargetType}
-                  onChange={(e) => setNewTargetType(e.target.value as any)}
-                  className="bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-cyan-500"
-                >
-                  <option value="SharedDrive">Shared Drive (Google Workspace)</option>
-                  <option value="SharedFolder">Shared Folder (Personal Gmail)</option>
-                </select>
-                <input
-                  type="text"
-                  placeholder="Drive / Folder ID"
-                  value={newTargetId}
-                  onChange={(e) => setNewTargetId(e.target.value)}
-                  className="bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 text-xs text-slate-200 placeholder-slate-600 focus:outline-none focus:border-cyan-500 font-mono"
-                />
-              </div>
+              <button
+                type="button"
+                onClick={() => setShowManualAddTarget(!showManualAddTarget)}
+                className="flex items-center space-x-1.5 text-xs font-semibold text-slate-400 hover:text-slate-200 transition-colors"
+              >
+                <span>Manual Entry: Add Target by Folder / Drive ID</span>
+                {showManualAddTarget ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+              </button>
+
+              {showManualAddTarget && (
+                <div className="bg-slate-900/60 border border-slate-800 rounded-xl p-4 space-y-3">
+                  <div className="grid grid-cols-3 gap-2">
+                    <input
+                      type="text"
+                      placeholder="Label (e.g., Primary Drive)"
+                      value={newTargetLabel}
+                      onChange={(e) => setNewTargetLabel(e.target.value)}
+                      className="bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 text-xs text-slate-200 placeholder-slate-600 focus:outline-none focus:border-cyan-500"
+                    />
+                    <select
+                      value={newTargetType}
+                      onChange={(e) => setNewTargetType(e.target.value as any)}
+                      className="bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-cyan-500"
+                    >
+                      <option value="SharedDrive">Shared Drive (Google Workspace)</option>
+                      <option value="SharedFolder">Shared Folder (Personal Gmail)</option>
+                    </select>
+                    <input
+                      type="text"
+                      placeholder="Drive / Folder ID"
+                      value={newTargetId}
+                      onChange={(e) => setNewTargetId(e.target.value)}
+                      className="bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 text-xs text-slate-200 placeholder-slate-600 focus:outline-none focus:border-cyan-500 font-mono"
+                    />
+                  </div>
+
+                  <div className="flex items-center justify-between pt-1">
+                    <button
+                      onClick={handleAddTarget}
+                      disabled={!newTargetId.trim() || !newTargetLabel.trim()}
+                      className="flex items-center space-x-1.5 px-3 py-2 rounded-lg text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-cyan-400 border border-slate-700 transition-all disabled:opacity-50"
+                    >
+                      <Plus className="w-3.5 h-3.5" />
+                      <span>Add Target to List</span>
+                    </button>
+                  </div>
+                </div>
+              )}
 
               <div className="flex items-center justify-between pt-2">
-                <button
-                  onClick={handleAddTarget}
-                  disabled={!newTargetId.trim() || !newTargetLabel.trim()}
-                  className="flex items-center space-x-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-cyan-400 border border-slate-700 transition-all disabled:opacity-50"
-                >
-                  <Plus className="w-3.5 h-3.5" />
-                  <span>Add Target</span>
-                </button>
 
                 <button
                   onClick={handleSaveTargets}

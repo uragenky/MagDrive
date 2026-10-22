@@ -38,6 +38,8 @@ pub struct VaultTarget {
     pub target_id: String,
     pub target_type: TargetType,
     pub label: String,
+    #[serde(default)]
+    pub account_email: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -40,7 +40,7 @@ magdrive/
 │   │   │   ├── mod.rs
 │   │   │   └── signature.rs           # Ed25519 digital signatures
 │   │   ├── drive/                     # Google Drive REST API & OAuth
-│   │   │   ├── client.rs              # DriveClient, multipart upload, downloads
+│   │   │   ├── client.rs              # Multi-tenant DriveClient pool, quota API, Shared Drive discovery & auto-folder provisioning
 │   │   │   ├── mod.rs
 │   │   │   ├── oauth.rs               # Loopback HTTP server & PKCE authorization
 │   │   │   └── permissions.rs         # Google Drive Permissions API (RBAC)
@@ -51,7 +51,7 @@ magdrive/
 │   │   │   ├── mod.rs
 │   │   │   └── parser.rs              # Magnet URI generator & parser
 │   │   ├── storage/                   # Local persistence
-│   │   │   ├── db.rs                  # SQLite database wrapper (rusqlite)
+│   │   │   ├── db.rs                  # SQLite persistence (rusqlite) for vaults, packages, transfers & multi-account pool
 │   │   │   └── mod.rs
 │   │   ├── vault/                     # Group vault configuration & export
 │   │   │   ├── model.rs               # VaultRecord & VaultExportPayload

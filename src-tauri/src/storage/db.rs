@@ -31,6 +31,17 @@ pub struct TransferRecord {
     pub updated_at: i64,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GoogleAccountRecord {
+    pub email: String,
+    pub display_name: String,
+    pub access_token: String,
+    pub refresh_token: String,
+    pub expires_at: i64,
+    pub root_folder_id: Option<String>,
+    pub created_at: i64,
+}
+
 #[derive(Clone)]
 pub struct Database {
     conn: Arc<Mutex<Connection>>,
@@ -104,6 +115,16 @@ impl Database {
                 destination_path TEXT,
                 updated_at INTEGER NOT NULL
             );
+
+            CREATE TABLE IF NOT EXISTS google_accounts (
+                email TEXT PRIMARY KEY,
+                display_name TEXT NOT NULL,
+                access_token TEXT NOT NULL,
+                refresh_token TEXT NOT NULL,
+                expires_at INTEGER NOT NULL,
+                root_folder_id TEXT,
+                created_at INTEGER NOT NULL
+            );
             "#,
         )?;
 
@@ -130,6 +151,98 @@ impl Database {
         conn.execute(
             "INSERT INTO settings (key, value) VALUES (?1, ?2) ON CONFLICT(key) DO UPDATE SET value = ?2",
             params![key, value],
+        )?;
+        Ok(())
+    }
+
+    // --- Google Accounts ---
+    pub fn save_google_account(&self, account: &GoogleAccountRecord) -> Result<(), StorageError> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            r#"INSERT INTO google_accounts (email, display_name, access_token, refresh_token, expires_at, root_folder_id, created_at)
+               VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+               ON CONFLICT(email) DO UPDATE SET
+               display_name=?2, access_token=?3, refresh_token=?4, expires_at=?5, root_folder_id=COALESCE(?6, google_accounts.root_folder_id)"#,
+            params![
+                account.email,
+                account.display_name,
+                account.access_token,
+                account.refresh_token,
+                account.expires_at,
+                account.root_folder_id,
+                account.created_at
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn get_google_account(&self, email: &str) -> Result<Option<GoogleAccountRecord>, StorageError> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT email, display_name, access_token, refresh_token, expires_at, root_folder_id, created_at FROM google_accounts WHERE email = ?1",
+        )?;
+        let mut rows = stmt.query(params![email])?;
+        if let Some(row) = rows.next()? {
+            Ok(Some(GoogleAccountRecord {
+                email: row.get(0)?,
+                display_name: row.get(1)?,
+                access_token: row.get(2)?,
+                refresh_token: row.get(3)?,
+                expires_at: row.get(4)?,
+                root_folder_id: row.get(5)?,
+                created_at: row.get(6)?,
+            }))
+        } else {
+            Ok(None)
+        }
+    }
+
+    pub fn list_google_accounts(&self) -> Result<Vec<GoogleAccountRecord>, StorageError> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT email, display_name, access_token, refresh_token, expires_at, root_folder_id, created_at FROM google_accounts ORDER BY created_at ASC",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok(GoogleAccountRecord {
+                email: row.get(0)?,
+                display_name: row.get(1)?,
+                access_token: row.get(2)?,
+                refresh_token: row.get(3)?,
+                expires_at: row.get(4)?,
+                root_folder_id: row.get(5)?,
+                created_at: row.get(6)?,
+            })
+        })?;
+        let mut accounts = Vec::new();
+        for r in rows {
+            accounts.push(r?);
+        }
+        Ok(accounts)
+    }
+
+    pub fn update_account_tokens(&self, email: &str, access_token: &str, expires_at: i64) -> Result<(), StorageError> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE google_accounts SET access_token = ?1, expires_at = ?2 WHERE email = ?3",
+            params![access_token, expires_at, email],
+        )?;
+        Ok(())
+    }
+
+    pub fn update_account_root_folder(&self, email: &str, folder_id: &str) -> Result<(), StorageError> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE google_accounts SET root_folder_id = ?1 WHERE email = ?2",
+            params![folder_id, email],
+        )?;
+        Ok(())
+    }
+
+    pub fn delete_google_account(&self, email: &str) -> Result<(), StorageError> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "DELETE FROM google_accounts WHERE email = ?1",
+            params![email],
         )?;
         Ok(())
     }

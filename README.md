@@ -12,6 +12,7 @@
 - [Cryptographic & Redundancy Design](#cryptographic--redundancy-design)
   - [Zero-Knowledge Encryption](#zero-knowledge-encryption)
   - [Adaptive Reed-Solomon Erasure Coding](#adaptive-reed-solomon-erasure-coding)
+  - [Multi-Account OAuth Pool & True Quota Isolation](#multi-account-oauth-pool--true-quota-isolation)
   - [Target Migration & Decommissioning](#target-migration--decommissioning)
   - [Magnet Link Protocol](#magnet-link-protocol)
 - [Prerequisites](#prerequisites)
@@ -47,8 +48,12 @@ Files uploaded through MagDrive are:
 - **Auto-Recovery & Self-Healing**: Loss of any storage target triggers real-time Galois Field $GF(2^8)$ reconstruction from surviving data and parity blocks.
 - **Dynamic Adaptive Erasure Coding**: Automatically computes the mathematically optimal $(D + P)$ Reed-Solomon scheme based on connected storage targets ($N \le 1 \to 1+0$, $N=2 \to 1+1$, $N=3 \to 2+1$, $N=4 \to 3+1$, $N=5 \to 3+2$, $N=6 \to 4+2$, $N=7 \to 5+2$, $N=8 \to 6+2$, $N \ge 9 \to N-3+3$). Enforces strict non-colocation ($1 \text{ shard per target}$) so total loss of up to $P$ Google accounts produces zero data loss.
 - **Multi-Stripe Balanced Target Rotation**: Rotates target placement per stripe `(stripe_index + shard_index) % targets.len()`, evenly balancing storage quota and network transfer volume across all connected Google Drives.
+- **Multi-Account OAuth Pool & True Quota Isolation**: Connect multiple Google accounts (`@gmail.com` or Google Workspace). Each target is bound to its owning account (`account_email`); shard uploads are dispatched through that specific account's OAuth session. This bypasses Google's post-2021 shared folder quota penalty by evenly consuming quota across multiple independent 15 GB accounts.
+- **Zero-Configuration Auto Folder Provisioning**: Authenticating any Google account automatically provisions a dedicated `MagDrive Storage` root folder via API. Add targets to vaults with 1 click without manually copying Drive/Folder IDs.
+- **Google Workspace Shared Drive Discovery**: Automatically discovers and lists all accessible Shared Drives for any connected account, allowing 1-click addition into the vault.
+- **Per-Account Live Storage Quota Monitoring**: Real-time meters for each connected account showing total capacity, used bytes, free space, usage percentages, and breakdowns (Drive files, trash, Gmail/Photos).
+- **Per-Target Shard Footprint Tracking**: Live shard count and byte volume displayed directly on each vault target card.
 - **Full Target Migration & Evacuation Engine**: 3-layer resilient shard migration (`files.copy` cloud fast-copy $\to$ direct relay download/upload $\to$ Reed-Solomon self-healing reconstruct from surviving shards). Supports replacing decommissioned drives with a new account or evacuating and rebalancing shards across remaining drives with optional old shard cleanup.
-- **Google Account Profile Status**: Displays authenticated Google account display name and email address directly within settings.
 - **Multi-Target Storage Abstraction**: Works transparently with Google Workspace Shared Drives (`supportsAllDrives=true`) or regular Shared Folders on `@gmail.com` personal accounts.
 - **Integrated Google Permissions RBAC**: Group administrators can invite or revoke member emails from the Shared Drive directly within the app via the Google Drive Permissions API.
 - **Local SQLite Cache**: File lists, metadata, and transfer queues are indexed locally for zero-latency searching and offline catalog browsing.
@@ -128,6 +133,19 @@ Files uploaded through MagDrive are:
 - **Strict Non-Colocation Guarantee**: Because $D + P \le N$, no single Google Drive target hosts more than 1 shard per stripe.
 - **Balanced Target Rotation**: Shards are placed using `(stripe_index + shard_index) % targets.len()`, distributing storage footprint and API quota consumption equally across all connected targets.
 - **Failure Tolerance**: If up to $P$ storage targets are permanently deleted, suspended, or hit quota limits, the client reconstructs missing shards on-the-fly via Galois Field $GF(2^8)$ matrix inversion.
+
+### Multi-Account OAuth Pool & True Quota Isolation
+- **Bypassing Google 2021 Shared Folder Quota Policy**:
+  - In personal Google Drive (`@gmail.com`), files uploaded to another person's shared folder still consume the *uploader's* storage quota.
+  - MagDrive overcomes this by maintaining a multi-account OAuth pool (`google_accounts` SQLite table).
+  - Every storage target is bound to its owning Google account (`account_email`).
+  - During stripe uploads, Shard 0 is uploaded with Account A's token, Shard 1 with Account B's token, and Shard 2 with Account C's token.
+  - This distributes cloud storage footprint across all accounts (e.g. $3 \times 15\text{ GB} = 45\text{ GB}$ pooled capacity).
+- **Zero-Configuration Folder Provisioning**:
+  - Authenticating a Google account automatically checks for or creates a dedicated root folder named `MagDrive Storage` (`find_or_create_magdrive_folder`).
+  - Users can attach the account to any vault with 1 click without manually copying folder IDs.
+- **Shared Drive Auto-Discovery**:
+  - Scans accessible Google Workspace Shared Drives via `drives.list` and provides a 1-click addition into the vault.
 
 ### Target Migration & Decommissioning
 - **3-Layer Resilient Shard Relocation**:

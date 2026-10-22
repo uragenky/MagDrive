@@ -16,12 +16,12 @@ use crate::crypto::argon::{derive_master_key, generate_salt};
 use crate::crypto::signature::Keypair;
 use crate::crypto::compute_sha256;
 use crate::crypto::aes::{encrypt_chunk, decrypt_chunk};
-use crate::drive::client::{DriveClient, DriveAboutUser};
+use crate::drive::client::{DriveClient, DriveAboutUser, SharedDriveItem, TargetType};
 use crate::drive::oauth::{start_oauth_flow, GcpCredentials};
 use crate::drive::permissions::DrivePermissionItem;
 use crate::erasure::rs::{encode, reconstruct, calculate_adaptive_erasure_schema};
 use crate::magnet::parser::{generate_swarm_magnet_link, parse_magnet_link, MagnetInfo};
-use crate::storage::db::{Database, TransferRecord};
+use crate::storage::db::{Database, TransferRecord, GoogleAccountRecord};
 use crate::tracker::{announce_to_trackers, calculate_blind_topic, fetch_peers_multi, report_dead_multi};
 use crate::vault::model::{VaultExportPayload, VaultRecord, VaultRole, VaultTarget};
 
@@ -361,8 +361,24 @@ pub async fn start_google_login(
     let db_clone = state.db.clone();
     tokio::spawn(async move {
         if let Ok(Ok(tokens)) = rx.await {
-            let _ = db_clone.set_setting("access_token", &tokens.access_token);
             let expires_at = chrono::Utc::now().timestamp() + tokens.expires_in as i64;
+            let temp_client = DriveClient::new(tokens.access_token.clone());
+
+            if let Ok(profile) = temp_client.get_user_profile().await {
+                let root_folder_id = temp_client.find_or_create_magdrive_folder().await.ok();
+                let account = GoogleAccountRecord {
+                    email: profile.email_address.clone(),
+                    display_name: profile.display_name.clone(),
+                    access_token: tokens.access_token.clone(),
+                    refresh_token: tokens.refresh_token.clone().unwrap_or_default(),
+                    expires_at,
+                    root_folder_id,
+                    created_at: chrono::Utc::now().timestamp(),
+                };
+                let _ = db_clone.save_google_account(&account);
+            }
+
+            let _ = db_clone.set_setting("access_token", &tokens.access_token);
             let _ = db_clone.set_setting("token_expires_at", &expires_at.to_string());
             if let Some(ref rt) = tokens.refresh_token {
                 let _ = db_clone.set_setting("refresh_token", rt);
@@ -389,6 +405,28 @@ pub async fn check_login_status(state: State<'_, AppState>) -> Result<bool, Stri
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountStorageQuotaInfo {
+    pub display_name: String,
+    pub email_address: String,
+    pub limit_bytes: Option<u64>,
+    pub usage_bytes: u64,
+    pub usage_in_drive_bytes: u64,
+    pub usage_in_trash_bytes: u64,
+    pub free_bytes: Option<u64>,
+    pub usage_percentage: Option<f64>,
+    pub is_unlimited: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TargetStorageUsage {
+    pub target_id: String,
+    pub chunk_count: usize,
+    pub total_bytes: u64,
+}
+
 #[tauri::command]
 pub async fn get_google_user_profile(state: State<'_, AppState>) -> Result<Option<DriveAboutUser>, String> {
     let client = match get_drive_client(&state.db).await {
@@ -406,11 +444,310 @@ pub async fn get_google_user_profile(state: State<'_, AppState>) -> Result<Optio
 }
 
 #[tauri::command]
+pub async fn get_storage_quota(state: State<'_, AppState>) -> Result<Option<AccountStorageQuotaInfo>, String> {
+    let client = match get_drive_client(&state.db).await {
+        Ok(c) => c,
+        Err(_) => return Ok(None),
+    };
+
+    match client.get_storage_quota().await {
+        Ok((user, quota_opt)) => {
+            let (limit_bytes, usage_bytes, usage_in_drive_bytes, usage_in_trash_bytes, free_bytes, usage_percentage, is_unlimited) = match quota_opt {
+                Some(q) => {
+                    let limit = q.limit.as_ref().and_then(|s| s.parse::<u64>().ok());
+                    let usage = q.usage.as_ref().and_then(|s| s.parse::<u64>().ok()).unwrap_or(0);
+                    let usage_drive = q.usage_in_drive.as_ref().and_then(|s| s.parse::<u64>().ok()).unwrap_or(0);
+                    let usage_trash = q.usage_in_drive_trash.as_ref().and_then(|s| s.parse::<u64>().ok()).unwrap_or(0);
+
+                    let (free, pct, unlim) = match limit {
+                        Some(l) if l > 0 => {
+                            let free = l.saturating_sub(usage);
+                            let pct = ((usage as f64 / l as f64) * 100.0).min(100.0);
+                            (Some(free), Some(pct), false)
+                        }
+                        _ => (None, None, true),
+                    };
+                    (limit, usage, usage_drive, usage_trash, free, pct, unlim)
+                }
+                None => (None, 0, 0, 0, None, None, true),
+            };
+
+            Ok(Some(AccountStorageQuotaInfo {
+                display_name: user.display_name,
+                email_address: user.email_address,
+                limit_bytes,
+                usage_bytes,
+                usage_in_drive_bytes,
+                usage_in_trash_bytes,
+                free_bytes,
+                usage_percentage,
+                is_unlimited,
+            }))
+        }
+        Err(e) => {
+            eprintln!("Failed to fetch Google storage quota: {}", e);
+            Ok(None)
+        }
+    }
+}
+
+#[tauri::command]
+pub async fn get_vault_targets_usage(
+    state: State<'_, AppState>,
+    vault_id: String,
+) -> Result<Vec<TargetStorageUsage>, String> {
+    let packages = state.db.list_packages(&vault_id).map_err(|e| e.to_string())?;
+    let mut usage_map: HashMap<String, (usize, u64)> = HashMap::new();
+
+    for pkg in &packages {
+        let chunk_bytes = (pkg.chunk_size + 28) as u64;
+        for stripe in &pkg.stripes {
+            for chunk in &stripe.chunks {
+                let entry = usage_map.entry(chunk.target_id.clone()).or_insert((0, 0));
+                entry.0 += 1;
+                entry.1 += chunk_bytes;
+            }
+        }
+    }
+
+    let results = usage_map
+        .into_iter()
+        .map(|(target_id, (chunk_count, total_bytes))| TargetStorageUsage {
+            target_id,
+            chunk_count,
+            total_bytes,
+        })
+        .collect();
+
+    Ok(results)
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GoogleAccountInfo {
+    pub email: String,
+    pub display_name: String,
+    pub root_folder_id: Option<String>,
+    pub limit_bytes: Option<u64>,
+    pub usage_bytes: u64,
+    pub usage_in_drive_bytes: u64,
+    pub usage_in_trash_bytes: u64,
+    pub free_bytes: Option<u64>,
+    pub usage_percentage: Option<f64>,
+    pub is_unlimited: bool,
+    pub created_at: i64,
+}
+
+#[tauri::command]
+pub async fn list_google_accounts(state: State<'_, AppState>) -> Result<Vec<GoogleAccountInfo>, String> {
+    let accounts = state.db.list_google_accounts().map_err(|e| e.to_string())?;
+    let mut infos = Vec::new();
+
+    for acc in accounts {
+        let client_res = get_drive_client_for_account(&state.db, &acc.email).await;
+        let mut root_folder_id = acc.root_folder_id.clone();
+
+        let (limit_bytes, usage_bytes, usage_in_drive_bytes, usage_in_trash_bytes, free_bytes, usage_percentage, is_unlimited) = match client_res {
+            Ok(client) => {
+                // Auto ensure root_folder_id if missing
+                if root_folder_id.is_none() {
+                    if let Ok(fid) = client.find_or_create_magdrive_folder().await {
+                        let _ = state.db.update_account_root_folder(&acc.email, &fid);
+                        root_folder_id = Some(fid);
+                    }
+                }
+
+                match client.get_storage_quota().await {
+                    Ok((_, quota_opt)) => {
+                        match quota_opt {
+                            Some(q) => {
+                                let limit = q.limit.as_ref().and_then(|s| s.parse::<u64>().ok());
+                                let usage = q.usage.as_ref().and_then(|s| s.parse::<u64>().ok()).unwrap_or(0);
+                                let usage_drive = q.usage_in_drive.as_ref().and_then(|s| s.parse::<u64>().ok()).unwrap_or(0);
+                                let usage_trash = q.usage_in_drive_trash.as_ref().and_then(|s| s.parse::<u64>().ok()).unwrap_or(0);
+
+                                let (free, pct, unlim) = match limit {
+                                    Some(l) if l > 0 => {
+                                        let free = l.saturating_sub(usage);
+                                        let pct = ((usage as f64 / l as f64) * 100.0).min(100.0);
+                                        (Some(free), Some(pct), false)
+                                    }
+                                    _ => (None, None, true),
+                                };
+                                (limit, usage, usage_drive, usage_trash, free, pct, unlim)
+                            }
+                            None => (None, 0, 0, 0, None, None, true),
+                        }
+                    }
+                    Err(_) => (None, 0, 0, 0, None, None, false),
+                }
+            }
+            Err(_) => (None, 0, 0, 0, None, None, false),
+        };
+
+        infos.push(GoogleAccountInfo {
+            email: acc.email,
+            display_name: acc.display_name,
+            root_folder_id,
+            limit_bytes,
+            usage_bytes,
+            usage_in_drive_bytes,
+            usage_in_trash_bytes,
+            free_bytes,
+            usage_percentage,
+            is_unlimited,
+            created_at: acc.created_at,
+        });
+    }
+
+    Ok(infos)
+}
+
+#[tauri::command]
+pub async fn remove_google_account(state: State<'_, AppState>, email: String) -> Result<(), String> {
+    state.db.delete_google_account(&email).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn list_accessible_shared_drives(
+    state: State<'_, AppState>,
+    email: String,
+) -> Result<Vec<SharedDriveItem>, String> {
+    let client = get_drive_client_for_account(&state.db, &email).await?;
+    client.list_shared_drives().await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn auto_add_account_target(
+    state: State<'_, AppState>,
+    vault_id: String,
+    email: String,
+) -> Result<VaultRecord, String> {
+    let mut vault = state.db.get_vault(&vault_id)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "Active vault not found".to_string())?;
+
+    let client = get_drive_client_for_account(&state.db, &email).await?;
+    let folder_id = client.find_or_create_magdrive_folder().await.map_err(|e| e.to_string())?;
+    let _ = state.db.update_account_root_folder(&email, &folder_id);
+
+    let account = state.db.get_google_account(&email)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "Account not found".to_string())?;
+
+    // Avoid duplicate target
+    if !vault.targets.iter().any(|t| t.target_id == folder_id) {
+        vault.targets.push(VaultTarget {
+            target_id: folder_id,
+            target_type: TargetType::SharedFolder,
+            label: format!("{} (Personal)", account.display_name),
+            account_email: Some(email),
+        });
+        state.db.save_vault(&vault).map_err(|e| e.to_string())?;
+    }
+
+    Ok(vault)
+}
+
+#[tauri::command]
+pub async fn add_shared_drive_target(
+    state: State<'_, AppState>,
+    vault_id: String,
+    email: String,
+    drive_id: String,
+    drive_name: String,
+) -> Result<VaultRecord, String> {
+    let mut vault = state.db.get_vault(&vault_id)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "Active vault not found".to_string())?;
+
+    // Avoid duplicate target
+    if !vault.targets.iter().any(|t| t.target_id == drive_id) {
+        vault.targets.push(VaultTarget {
+            target_id: drive_id,
+            target_type: TargetType::SharedDrive,
+            label: format!("{} (Shared Drive)", drive_name),
+            account_email: Some(email),
+        });
+        state.db.save_vault(&vault).map_err(|e| e.to_string())?;
+    }
+
+    Ok(vault)
+}
+
+#[tauri::command]
 pub async fn logout_google(state: State<'_, AppState>) -> Result<(), String> {
     let _ = state.db.set_setting("access_token", "");
     let _ = state.db.set_setting("refresh_token", "");
     let _ = state.db.set_setting("token_expires_at", "0");
     Ok(())
+}
+
+pub async fn get_drive_client_for_account(db: &Database, email: &str) -> Result<DriveClient, String> {
+    let account = db.get_google_account(email)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| format!("Google account {} not found in local vault", email))?;
+
+    let client_id = db.get_setting("gcp_client_id").unwrap_or_default();
+    let client_secret = db.get_setting("gcp_client_secret").unwrap_or_default();
+    let creds = if !client_id.is_empty() {
+        Some(GcpCredentials { client_id, client_secret })
+    } else {
+        None
+    };
+
+    let mut access_token = account.access_token;
+    let refresh_token = account.refresh_token;
+    let now = chrono::Utc::now().timestamp();
+
+    // If token expired or expires within 60s, refresh proactively
+    if (account.expires_at == 0 || account.expires_at - now < 60) && !refresh_token.is_empty() {
+        if let Some(ref c) = creds {
+            if let Ok(new_tokens) = crate::drive::oauth::refresh_access_token(c, &refresh_token).await {
+                access_token = new_tokens.access_token;
+                let new_expires_at = now + new_tokens.expires_in as i64;
+                let _ = db.update_account_tokens(email, &access_token, new_expires_at);
+            }
+        }
+    }
+
+    Ok(DriveClient::for_account(
+        email.to_string(),
+        access_token,
+        if refresh_token.is_empty() { None } else { Some(refresh_token) },
+        creds,
+        Some(db.clone()),
+    ))
+}
+
+pub async fn get_drive_clients_for_targets(
+    db: &Database,
+    targets: &[VaultTarget],
+) -> Result<Vec<DriveClient>, String> {
+    let mut clients = Vec::with_capacity(targets.len());
+    let default_client = get_drive_client(db).await.ok();
+
+    for t in targets {
+        if let Some(ref email) = t.account_email {
+            match get_drive_client_for_account(db, email).await {
+                Ok(c) => clients.push(c),
+                Err(_) => {
+                    if let Some(ref def) = default_client {
+                        clients.push(def.clone());
+                    } else {
+                        return Err(format!("No Google account available for target {}", t.label));
+                    }
+                }
+            }
+        } else if let Some(ref def) = default_client {
+            clients.push(def.clone());
+        } else {
+            return Err(format!("No Google account available for target {}", t.label));
+        }
+    }
+
+    Ok(clients)
 }
 
 // Helper to get active DriveClient with proactive auto-refresh and reactive retry
@@ -420,6 +757,14 @@ async fn get_drive_client(db: &Database) -> Result<DriveClient, String> {
     let expires_at: i64 = db.get_setting("token_expires_at")
         .and_then(|s| s.parse().ok())
         .unwrap_or(0);
+
+    if access_token.is_empty() && refresh_token.is_empty() {
+        if let Ok(accounts) = db.list_google_accounts() {
+            if let Some(first) = accounts.first() {
+                return get_drive_client_for_account(db, &first.email).await;
+            }
+        }
+    }
 
     let client_id = db.get_setting("gcp_client_id").unwrap_or_default();
     let client_secret = db.get_setting("gcp_client_secret").unwrap_or_default();
@@ -1519,7 +1864,7 @@ async fn process_stripe_task(
     package_id: String,
     targets: Vec<VaultTarget>,
     resolved_chunks_dirs: Vec<String>,
-    client: DriveClient,
+    clients: Vec<DriveClient>,
     progress: Arc<UploadProgressNotifier>,
     uploaded_cloud_ids: Option<Arc<Mutex<Vec<String>>>>,
 ) -> Result<Stripe, String> {
@@ -1558,7 +1903,7 @@ async fn process_stripe_task(
         let target_idx = (s_idx + shard_idx) % targets.len();
         let target = targets[target_idx].clone();
         let chunks_sub = resolved_chunks_dirs[target_idx].clone();
-        let client_clone = client.clone();
+        let client_clone = clients[target_idx].clone();
         let shard_len = encrypted_shard.len() as u64;
         let progress_clone = progress.clone();
         let uploaded_ids_clone = uploaded_cloud_ids.clone();
@@ -1656,7 +2001,7 @@ pub async fn upload_file_package(
     // Determine Reed-Solomon scheme based on target count
     let (data_shards, parity_shards) = calculate_adaptive_erasure_schema(vault.targets.len());
 
-    let client = get_drive_client(&state.db).await?;
+    let clients = get_drive_clients_for_targets(&state.db, &vault.targets).await?;
 
     // Create journal entry in transfers table
     let transfer_id = format!("tx_{}", Uuid::new_v4().simple());
@@ -1702,8 +2047,8 @@ pub async fn upload_file_package(
 
     // Pre-resolve and cache chunks folders for all targets concurrently
     let mut chunks_dir_futures = Vec::new();
-    for target in &vault.targets {
-        let client_clone = client.clone();
+    for (t_idx, target) in vault.targets.iter().enumerate() {
+        let client_clone = clients[t_idx].clone();
         let target_id = target.target_id.clone();
         let cache = state.folder_cache.clone();
         chunks_dir_futures.push(async move {
@@ -1738,7 +2083,7 @@ pub async fn upload_file_package(
             let end = (start + chunk_size).min(raw_bytes_arc.len());
             let stripe_data = raw_bytes_arc[start..end].to_vec();
 
-            let client_clone = client.clone();
+            let clients_clone = clients.clone();
             let targets_clone = vault.targets.clone();
             let dirs_clone = resolved_chunks_dirs.clone();
             let progress_clone = progress.clone();
@@ -1754,7 +2099,7 @@ pub async fn upload_file_package(
                     pkg_id_clone,
                     targets_clone,
                     dirs_clone,
-                    client_clone,
+                    clients_clone,
                     progress_clone,
                     None,
                 )
@@ -1810,8 +2155,8 @@ pub async fn upload_file_package(
     let meta_file_name = format!("meta_{}.enc", package_id);
 
     let mut manifest_futures = Vec::new();
-    for target in &vault.targets {
-        let client_clone = client.clone();
+    for (t_idx, target) in vault.targets.iter().enumerate() {
+        let client_clone = clients[t_idx].clone();
         let target_id = target.target_id.clone();
         let m_name = meta_file_name.clone();
         let m_bytes = encrypted_manifest.clone();
@@ -1832,8 +2177,8 @@ pub async fn upload_file_package(
     let _ = state.db.set_package_key_enc(&package_id, &wrapped_key_b64);
 
     // Set targets public viewer so other accounts can copy/download encrypted shards
-    for target in &vault.targets {
-        let _ = client.set_folder_public_viewer(&target.target_id).await;
+    for (t_idx, target) in vault.targets.iter().enumerate() {
+        let _ = clients[t_idx].set_folder_public_viewer(&target.target_id).await;
     }
 
     // Announce to swarm trackers
@@ -2559,7 +2904,8 @@ pub async fn finish_upload_session(
 
     let (data_shards, parity_shards) = calculate_adaptive_erasure_schema(vault.targets.len());
 
-    let client = get_drive_client(&state.db).await?;
+    let clients = get_drive_clients_for_targets(&state.db, &vault.targets).await?;
+    let default_client = get_drive_client(&state.db).await?;
     let chunk_size = session.chunk_size;
     let num_stripes = (raw_bytes.len() + chunk_size - 1) / chunk_size.max(1);
     let total_shards = num_stripes * (data_shards + parity_shards);
@@ -2580,8 +2926,8 @@ pub async fn finish_upload_session(
 
     // Pre-resolve and cache chunks folders for all targets concurrently
     let mut chunks_dir_futures = Vec::new();
-    for target in &vault.targets {
-        let client_clone = client.clone();
+    for (t_idx, target) in vault.targets.iter().enumerate() {
+        let client_clone = clients[t_idx].clone();
         let target_id = target.target_id.clone();
         let cache = state.folder_cache.clone();
         chunks_dir_futures.push(async move {
@@ -2628,7 +2974,7 @@ pub async fn finish_upload_session(
             let end = (start + chunk_size).min(raw_bytes_arc.len());
             let stripe_data = raw_bytes_arc[start..end].to_vec();
 
-            let client_clone = client.clone();
+            let clients_clone = clients.clone();
             let targets_clone = vault.targets.clone();
             let dirs_clone = resolved_chunks_dirs.clone();
             let progress_clone = progress.clone();
@@ -2648,7 +2994,7 @@ pub async fn finish_upload_session(
                     pkg_id_clone,
                     targets_clone,
                     dirs_clone,
-                    client_clone,
+                    clients_clone,
                     progress_clone,
                     Some(uploaded_ids_clone),
                 )
@@ -2662,7 +3008,7 @@ pub async fn finish_upload_session(
         match res {
             Ok(stripe) => stripes.push(stripe),
             Err(e) => {
-                let client_clone = client.clone();
+                let client_clone = default_client.clone();
                 let cleanup_ids = uploaded_cloud_ids.lock().unwrap().clone();
                 tokio::spawn(async move {
                     for fid in cleanup_ids {
@@ -2716,8 +3062,8 @@ pub async fn finish_upload_session(
     let manifest_file_name = format!("meta_{}.enc", package_id);
 
     let mut manifest_futures = Vec::new();
-    for target in &vault.targets {
-        let client_clone = client.clone();
+    for (t_idx, target) in vault.targets.iter().enumerate() {
+        let client_clone = clients[t_idx].clone();
         let target_id = target.target_id.clone();
         let m_name = manifest_file_name.clone();
         let m_bytes = manifest_bytes.clone();
@@ -2737,8 +3083,8 @@ pub async fn finish_upload_session(
     let _ = state.db.set_package_key_enc(&package_id, &wrapped_key_b64);
 
     // Set targets public viewer so other accounts can copy/download encrypted shards
-    for target in &vault.targets {
-        let _ = client.set_folder_public_viewer(&target.target_id).await;
+    for (t_idx, target) in vault.targets.iter().enumerate() {
+        let _ = clients[t_idx].set_folder_public_viewer(&target.target_id).await;
     }
 
     // Announce to swarm trackers

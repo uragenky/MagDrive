@@ -6,6 +6,7 @@ export interface VaultTarget {
   target_id: string;
   target_type: TargetType;
   label: string;
+  account_email?: string;
 }
 
 export interface VaultRecord {
@@ -202,6 +203,45 @@ export interface TargetMigrationResult {
   failed_count: number;
   message: string;
 }
+
+export interface AccountStorageQuotaInfo {
+  displayName: string;
+  emailAddress: string;
+  limitBytes?: number;
+  usageBytes: number;
+  usageInDriveBytes: number;
+  usageInTrashBytes: number;
+  freeBytes?: number;
+  usagePercentage?: number;
+  isUnlimited: boolean;
+}
+
+export interface TargetStorageUsage {
+  targetId: string;
+  chunkCount: number;
+  totalBytes: number;
+}
+
+export interface GoogleAccountInfo {
+  email: string;
+  displayName: string;
+  rootFolderId?: string;
+  limitBytes?: number;
+  usageBytes: number;
+  usageInDriveBytes: number;
+  usageInTrashBytes: number;
+  freeBytes?: number;
+  usagePercentage?: number;
+  isUnlimited: boolean;
+  createdAt: number;
+}
+
+export interface SharedDriveItem {
+  id: string;
+  name: string;
+  canAddChildren: boolean;
+}
+
 
 
 

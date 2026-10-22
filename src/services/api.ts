@@ -19,6 +19,10 @@ import {
   AdaptiveErasureInfo,
   TargetMigrationStats,
   TargetMigrationResult,
+  AccountStorageQuotaInfo,
+  TargetStorageUsage,
+  GoogleAccountInfo,
+  SharedDriveItem,
 } from '../types';
 
 // Fast native FileReader blob-to-base64 conversion (avoids large JS string allocations)
@@ -251,4 +255,15 @@ export const api = {
     invoke<string | null>('pick_save_file_path', { defaultName, defaultDir }),
   resolveDownloadPath: (downloadDir: string, fileName: string) =>
     invoke<string>('resolve_download_path', { downloadDir, fileName }),
+  getStorageQuota: () => invoke<AccountStorageQuotaInfo | null>('get_storage_quota'),
+  getVaultTargetsUsage: (vaultId: string) =>
+    invoke<TargetStorageUsage[]>('get_vault_targets_usage', { vaultId }),
+  listGoogleAccounts: () => invoke<GoogleAccountInfo[]>('list_google_accounts'),
+  removeGoogleAccount: (email: string) => invoke<void>('remove_google_account', { email }),
+  listAccessibleSharedDrives: (email: string) =>
+    invoke<SharedDriveItem[]>('list_accessible_shared_drives', { email }),
+  autoAddAccountTarget: (vaultId: string, email: string) =>
+    invoke<VaultRecord>('auto_add_account_target', { vaultId, email }),
+  addSharedDriveTarget: (vaultId: string, email: string, driveId: string, driveName: string) =>
+    invoke<VaultRecord>('add_shared_drive_target', { vaultId, email, driveId, driveName }),
 };
