@@ -13,6 +13,7 @@
   - [Zero-Knowledge Encryption](#zero-knowledge-encryption)
   - [Adaptive Reed-Solomon Erasure Coding](#adaptive-reed-solomon-erasure-coding)
   - [Multi-Account OAuth Pool & True Quota Isolation](#multi-account-oauth-pool--true-quota-isolation)
+  - [Isolated Package Storage & Least-Privilege Sharing](#isolated-package-storage--least-privilege-sharing)
   - [Target Migration & Decommissioning](#target-migration--decommissioning)
   - [Magnet Link Protocol](#magnet-link-protocol)
 - [Prerequisites](#prerequisites)
@@ -49,7 +50,10 @@ Files uploaded through MagDrive are:
 - **Dynamic Adaptive Erasure Coding**: Automatically computes the mathematically optimal $(D + P)$ Reed-Solomon scheme based on connected storage targets ($N \le 1 \to 1+0$, $N=2 \to 1+1$, $N=3 \to 2+1$, $N=4 \to 3+1$, $N=5 \to 3+2$, $N=6 \to 4+2$, $N=7 \to 5+2$, $N=8 \to 6+2$, $N \ge 9 \to N-3+3$). Enforces strict non-colocation ($1 \text{ shard per target}$) so total loss of up to $P$ Google accounts produces zero data loss.
 - **Multi-Stripe Balanced Target Rotation**: Rotates target placement per stripe `(stripe_index + shard_index) % targets.len()`, evenly balancing storage quota and network transfer volume across all connected Google Drives.
 - **Multi-Account OAuth Pool & True Quota Isolation**: Connect multiple Google accounts (`@gmail.com` or Google Workspace). Each target is bound to its owning account (`account_email`); shard uploads are dispatched through that specific account's OAuth session. This bypasses Google's post-2021 shared folder quota penalty by evenly consuming quota across multiple independent 15 GB accounts.
-- **Zero-Configuration Auto Folder Provisioning**: Authenticating any Google account automatically provisions a dedicated `MagDrive Storage` root folder via API. Add targets to vaults with 1 click without manually copying Drive/Folder IDs.
+- **Dynamic Per-Vault Root Folders & Collision Resolution**: Automatically provisions named root folders with format `MagDrive - <Vault Name>`. If identical names exist on Drive, an internal `.magdrive/vault_id` identity tag detects conflicts and transparently disambiguates folders (`(2)`, `(3)`).
+- **Isolated Per-Package Storage & Least-Privilege Sharing**: Shards and manifests are stored in dedicated per-package subfolders (`.magdrive/packages/<package_id>/`). Only this package subfolder is granted public reader (`anyone with link: reader`) via a single API call; the root vault folder and internal catalog remain **100% PRIVATE**, preventing unauthorized browsing of other vault files.
+- **Dual-Manifest Architecture**: Encrypted manifest is uploaded privately to `.magdrive/metadata/` for fast internal vault sync, and duplicated to `.magdrive/packages/<package_id>/meta.enc` for frictionless Magnet Link downloads without Google auth.
+- **Exploit-Hardened Queries & Safe IDs**: Sanitized Google Drive API search queries (`escape_drive_query`) and strict regex validation on package identifiers (`validate_package_id`) preventing path traversal and search query injection.
 - **Google Workspace Shared Drive Discovery**: Automatically discovers and lists all accessible Shared Drives for any connected account, allowing 1-click addition into the vault.
 - **Per-Account Live Storage Quota Monitoring**: Real-time meters for each connected account showing total capacity, used bytes, free space, usage percentages, and breakdowns (Drive files, trash, Gmail/Photos).
 - **Per-Target Shard Footprint Tracking**: Live shard count and byte volume displayed directly on each vault target card.
@@ -146,6 +150,21 @@ Files uploaded through MagDrive are:
   - Users can attach the account to any vault with 1 click without manually copying folder IDs.
 - **Shared Drive Auto-Discovery**:
   - Scans accessible Google Workspace Shared Drives via `drives.list` and provides a 1-click addition into the vault.
+
+### Isolated Package Storage & Least-Privilege Sharing
+- **Per-Vault Root Folders**:
+  - Automatically names root target folders as `MagDrive - <Vault Name>`.
+  - Disambiguates name collisions on Google Drive using `.magdrive/vault_id` identity markers (`(2)`, `(3)`).
+- **Subfolder Isolation**:
+  - Shards and manifests are stored under `.magdrive/packages/<package_id>/`.
+  - The root vault directory and `.magdrive/metadata/` directory remain **100% PRIVATE**.
+  - Only the specific `.magdrive/packages/<package_id>/` folder is marked `anyone with link: reader` (single API call). An external Magnet Link downloader can never navigate upward or browse other files in the vault.
+- **Dual Manifest Distribution**:
+  - `metadata/meta_<package_id>.enc`: Uploaded to private metadata folder for fast internal vault synchronization.
+  - `packages/<package_id>/meta.enc`: Uploaded to the public package folder so recipients of Magnet Links can parse manifests and download shards directly without encountering `HTTP 403 Forbidden`.
+- **Security Hardening**:
+  - All Google Drive search queries escape quotes and backslashes via `escape_drive_query`.
+  - Package identifiers are strictly validated (`^[a-zA-Z0-9_-]{8,64}$`) to eliminate path traversal vulnerabilities.
 
 ### Target Migration & Decommissioning
 - **3-Layer Resilient Shard Relocation**:

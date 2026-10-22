@@ -123,6 +123,11 @@ fn create_optimized_http_client() -> reqwest::Client {
         .unwrap_or_default()
 }
 
+/// Sanitizes values for Google Drive API queries (escapes backslashes and single quotes)
+pub fn escape_drive_query(value: &str) -> String {
+    value.replace('\\', "\\\\").replace('\'', "\\'")
+}
+
 impl DriveClient {
     pub fn new(access_token: String) -> Self {
         let client = create_optimized_http_client();
@@ -217,7 +222,8 @@ impl DriveClient {
 
     /// Finds a folder with `name` inside `parent_id` without creating it (read-only for peer inspection)
     pub async fn find_subfolder(&self, parent_id: &str, folder_name: &str) -> Result<Option<String>, DriveError> {
-        let query = format!("'{}' in parents and name = '{}' and mimeType = 'application/vnd.google-apps.folder' and trashed = false", parent_id, folder_name);
+        let safe_name = escape_drive_query(folder_name);
+        let query = format!("'{}' in parents and name = '{}' and mimeType = 'application/vnd.google-apps.folder' and trashed = false", parent_id, safe_name);
         let list_url = format!(
             "https://www.googleapis.com/drive/v3/files?q={}&fields=files(id,name)&supportsAllDrives=true&includeItemsFromAllDrives=true",
             url::form_urlencoded::byte_serialize(query.as_bytes()).collect::<String>()
@@ -251,7 +257,8 @@ impl DriveClient {
     /// Finds or creates a folder with `name` inside `parent_id`
     pub async fn ensure_folder(&self, parent_id: &str, folder_name: &str) -> Result<String, DriveError> {
         // First check if folder exists
-        let query = format!("'{}' in parents and name = '{}' and mimeType = 'application/vnd.google-apps.folder' and trashed = false", parent_id, folder_name);
+        let safe_name = escape_drive_query(folder_name);
+        let query = format!("'{}' in parents and name = '{}' and mimeType = 'application/vnd.google-apps.folder' and trashed = false", parent_id, safe_name);
         let list_url = format!(
             "https://www.googleapis.com/drive/v3/files?q={}&fields=files(id,name)&supportsAllDrives=true&includeItemsFromAllDrives=true",
             url::form_urlencoded::byte_serialize(query.as_bytes()).collect::<String>()
@@ -664,11 +671,140 @@ impl DriveClient {
             Ok(())
         } else {
             let msg = res.text().await.unwrap_or_default();
+            // If domain policy prevents sharing with 'anyone' (e.g. strict Google Workspace), treat as non-fatal warning
+            if status.as_u16() == 403 && (msg.contains("cannotShareOutsideDomain") || msg.contains("domainPolicy") || msg.contains("restricted")) {
+                eprintln!("[MagDrive] Warning: Public sharing restricted by domain policy for folder {}: {}", folder_id, msg);
+                return Ok(());
+            }
             Err(DriveError::ApiError {
                 status: status.as_u16(),
                 message: msg,
             })
         }
+    }
+
+    /// Ensures that `.magdrive/packages/<package_id>` exists under `target_root_id`
+    /// and grants `anyone with link: reader` permission strictly to this package folder.
+    pub async fn ensure_package_folder(
+        &self,
+        target_root_id: &str,
+        package_id: &str,
+    ) -> Result<String, DriveError> {
+        let magdrive_dir = self.ensure_folder(target_root_id, ".magdrive").await?;
+        let packages_dir = self.ensure_folder(&magdrive_dir, "packages").await?;
+        let pkg_folder_id = self.ensure_folder(&packages_dir, package_id).await?;
+        // Set public viewer on this package folder only
+        let _ = self.set_folder_public_viewer(&pkg_folder_id).await;
+        Ok(pkg_folder_id)
+    }
+
+    /// Finds or creates a dedicated root folder named "MagDrive - <vault_name>" in the user's Google Drive.
+    /// Uses `.magdrive/vault_id` identity tag to prevent collision if multiple vaults share identical names.
+    pub async fn find_or_create_vault_folder(
+        &self,
+        vault_id: &str,
+        vault_name: &str,
+    ) -> Result<String, DriveError> {
+        let clean_name = vault_name.trim();
+        let base_name = if clean_name.is_empty() {
+            "MagDrive - Default".to_string()
+        } else {
+            format!("MagDrive - {}", clean_name)
+        };
+
+        // Try candidate folder names: "MagDrive - Name", "MagDrive - Name (2)", ...
+        for suffix in 1..=20 {
+            let candidate_name = if suffix == 1 {
+                base_name.clone()
+            } else {
+                format!("{} ({})", base_name, suffix)
+            };
+
+            let safe_name = escape_drive_query(&candidate_name);
+            let query = format!(
+                "'root' in parents and name = '{}' and mimeType = 'application/vnd.google-apps.folder' and trashed = false",
+                safe_name
+            );
+            let list_url = format!(
+                "https://www.googleapis.com/drive/v3/files?q={}&fields=files(id,name)&supportsAllDrives=true&includeItemsFromAllDrives=true",
+                url::form_urlencoded::byte_serialize(query.as_bytes()).collect::<String>()
+            );
+
+            let mut res = self
+                .client
+                .get(&list_url)
+                .headers(self.auth_headers())
+                .send()
+                .await?;
+
+            if res.status().as_u16() == 401 && self.try_refresh_token().await {
+                res = self
+                    .client
+                    .get(&list_url)
+                    .headers(self.auth_headers())
+                    .send()
+                    .await?;
+            }
+
+            let existing_folder_id = if res.status().is_success() {
+                let list: DriveFileListResponse = res.json().await?;
+                list.files.first().map(|f| f.id.clone())
+            } else {
+                None
+            };
+
+            if let Some(folder_id) = existing_folder_id {
+                // Folder exists: check if it belongs to our vault_id
+                if let Ok(Some(magdrive_dir)) = self.find_subfolder(&folder_id, ".magdrive").await {
+                    let q_id = format!("'{}' in parents and name = 'vault_id' and trashed = false", magdrive_dir);
+                    let marker_url = format!(
+                        "https://www.googleapis.com/drive/v3/files?q={}&fields=files(id,name)&supportsAllDrives=true&includeItemsFromAllDrives=true",
+                        url::form_urlencoded::byte_serialize(q_id.as_bytes()).collect::<String>()
+                    );
+                    let mut m_res = self.client.get(&marker_url).headers(self.auth_headers()).send().await?;
+                    if m_res.status().as_u16() == 401 && self.try_refresh_token().await {
+                        m_res = self.client.get(&marker_url).headers(self.auth_headers()).send().await?;
+                    }
+                    if m_res.status().is_success() {
+                        let m_list: DriveFileListResponse = m_res.json().await?;
+                        if let Some(marker_file) = m_list.files.first() {
+                            if let Ok(content_bytes) = self.download_file(&marker_file.id).await {
+                                let stored_id = String::from_utf8_lossy(&content_bytes).trim().to_string();
+                                if stored_id == vault_id {
+                                    // Matched! Reuse this folder
+                                    return Ok(folder_id);
+                                } else {
+                                    // Belongs to a different vault with the same name, continue to next candidate
+                                    continue;
+                                }
+                            }
+                        } else {
+                            // Empty .magdrive dir, claim this folder for our vault
+                            let _ = self.upload_file(&magdrive_dir, "vault_id", vault_id.as_bytes()).await;
+                            return Ok(folder_id);
+                        }
+                    }
+                } else {
+                    // No .magdrive directory yet, claim this folder
+                    let magdrive_dir = self.ensure_folder(&folder_id, ".magdrive").await?;
+                    let _ = self.upload_file(&magdrive_dir, "vault_id", vault_id.as_bytes()).await;
+                    return Ok(folder_id);
+                }
+            } else {
+                // Folder does not exist, create it cleanly
+                let new_folder_id = self.ensure_folder("root", &candidate_name).await?;
+                let magdrive_dir = self.ensure_folder(&new_folder_id, ".magdrive").await?;
+                let _ = self.upload_file(&magdrive_dir, "vault_id", vault_id.as_bytes()).await;
+                return Ok(new_folder_id);
+            }
+        }
+
+        // Fallback: create with vault_id suffix
+        let fallback_name = format!("{} - {}", base_name, &vault_id[..vault_id.len().min(8)]);
+        let fallback_id = self.ensure_folder("root", &fallback_name).await?;
+        let magdrive_dir = self.ensure_folder(&fallback_id, ".magdrive").await?;
+        let _ = self.upload_file(&magdrive_dir, "vault_id", vault_id.as_bytes()).await;
+        Ok(fallback_id)
     }
 
     /// Fetches the authenticated user's profile info (display name and email address)
@@ -753,5 +889,17 @@ impl DriveClient {
                 message: msg,
             })
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_escape_drive_query() {
+        assert_eq!(escape_drive_query("Normal Vault"), "Normal Vault");
+        assert_eq!(escape_drive_query("John's Vault"), "John\\'s Vault");
+        assert_eq!(escape_drive_query("Path\\Folder's"), "Path\\\\Folder\\'s");
     }
 }

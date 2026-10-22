@@ -166,6 +166,33 @@ pub async fn ensure_cached_folder(
     Ok(id)
 }
 
+/// Validates package ID against path traversal and special characters
+pub fn validate_package_id(package_id: &str) -> Result<(), String> {
+    if package_id.is_empty() || package_id.len() > 64 {
+        return Err("Package ID must be between 1 and 64 characters".to_string());
+    }
+    if !package_id.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-') {
+        return Err("Package ID contains invalid characters".to_string());
+    }
+    Ok(())
+}
+
+/// Ensures `.magdrive/packages/<package_id>` exists under `target_root_id` and has public reader permission
+pub async fn ensure_cached_package_folder(
+    client: &DriveClient,
+    folder_cache: &Arc<Mutex<HashMap<String, String>>>,
+    target_root_id: &str,
+    package_id: &str,
+) -> Result<String, String> {
+    validate_package_id(package_id)?;
+    let magdrive_dir = ensure_cached_folder(client, folder_cache, target_root_id, ".magdrive").await?;
+    let packages_dir = ensure_cached_folder(client, folder_cache, &magdrive_dir, "packages").await?;
+    let pkg_folder = ensure_cached_folder(client, folder_cache, &packages_dir, package_id).await?;
+    // Set public viewer on this package folder only (gracefully handles domain policy restrictions)
+    let _ = client.set_folder_public_viewer(&pkg_folder).await;
+    Ok(pkg_folder)
+}
+
 pub fn get_or_derive_master_key(
     key_cache: &Arc<Mutex<HashMap<String, [u8; 32]>>>,
     vault_id: &str,
@@ -629,7 +656,7 @@ pub async fn auto_add_account_target(
         .ok_or_else(|| "Active vault not found".to_string())?;
 
     let client = get_drive_client_for_account(&state.db, &email).await?;
-    let folder_id = client.find_or_create_magdrive_folder().await.map_err(|e| e.to_string())?;
+    let folder_id = client.find_or_create_vault_folder(&vault.id, &vault.name).await.map_err(|e| e.to_string())?;
     let _ = state.db.update_account_root_folder(&email, &folder_id);
 
     let account = state.db.get_google_account(&email)
@@ -1241,7 +1268,21 @@ pub async fn generate_magnet(
     };
 
     let sources: Vec<String> = if let Some(ref v) = vault {
-        v.targets.iter().map(|t| t.target_id.clone()).collect()
+        let mut pkg_sources = Vec::new();
+        if let Ok(clients) = get_drive_clients_for_targets(&state.db, &v.targets).await {
+            for (idx, target) in v.targets.iter().enumerate() {
+                if let Some(client) = clients.get(idx) {
+                    if let Ok(pkg_dir) = ensure_cached_package_folder(client, &state.folder_cache, &target.target_id, &pkg.package_id).await {
+                        pkg_sources.push(pkg_dir);
+                        continue;
+                    }
+                }
+                pkg_sources.push(target.target_id.clone());
+            }
+        } else {
+            pkg_sources = v.targets.iter().map(|t| t.target_id.clone()).collect();
+        }
+        pkg_sources
     } else {
         Vec::new()
     };
@@ -1341,9 +1382,14 @@ pub async fn resolve_magnet_package(
             }
 
             for folder_id in &search_folders {
-                // Check both root and .magdrive/metadata/ folder path using read-only find_subfolder
+                // Check folder_id itself (could be public package folder), or subfolder paths
                 let mut meta_folder_candidates = vec![folder_id.clone()];
                 if let Ok(Some(magdrive_dir)) = client.find_subfolder(folder_id, ".magdrive").await {
+                    if let Ok(Some(pkgs_dir)) = client.find_subfolder(&magdrive_dir, "packages").await {
+                        if let Ok(Some(pkg_dir)) = client.find_subfolder(&pkgs_dir, &info.package_id).await {
+                            meta_folder_candidates.push(pkg_dir);
+                        }
+                    }
                     if let Ok(Some(meta_dir)) = client.find_subfolder(&magdrive_dir, "metadata").await {
                         meta_folder_candidates.push(meta_dir);
                     }
@@ -1352,7 +1398,7 @@ pub async fn resolve_magnet_package(
                 for meta_dir in meta_folder_candidates {
                     if let Ok(files) = client.list_files_in_folder(&meta_dir).await {
                         for f in files {
-                            if f.name == manifest_name {
+                            if f.name == manifest_name || f.name == "meta.enc" {
                                 if let Ok(enc_data) = client.download_file(&f.id).await {
                                     for key in &possible_keys {
                                         if let Ok(manifest) = PackageManifest::decrypt(&enc_data, key) {
@@ -1487,14 +1533,14 @@ pub async fn copy_shards_to_my_drive(
     let targets = &vault.targets;
     let num_targets = targets.len();
 
-    // Ensure .magdrive and chunks folders exist across all configured vault targets
+    // Ensure .magdrive and isolated package folders exist across all configured vault targets
     let mut resolved_chunks_dirs = Vec::new();
     let mut resolved_magdrive_dirs = Vec::new();
     for target in targets {
         let magdrive_dir = ensure_cached_folder(&client, &state.folder_cache, &target.target_id, ".magdrive").await?;
-        let chunks_dir = ensure_cached_folder(&client, &state.folder_cache, &magdrive_dir, "chunks").await?;
+        let pkg_dir = ensure_cached_package_folder(&client, &state.folder_cache, &target.target_id, &package_id).await?;
         resolved_magdrive_dirs.push(magdrive_dir);
-        resolved_chunks_dirs.push(chunks_dir);
+        resolved_chunks_dirs.push(pkg_dir);
     }
 
     let mut chunk_refs = Vec::new();
@@ -1622,30 +1668,38 @@ pub async fn copy_shards_to_my_drive(
     if let Some(mk) = master_key_opt {
         if let Ok(meta_bytes) = updated_manifest.encrypt(&mk) {
             let meta_file_name = format!("meta_{}.enc", package_id);
-            for magdrive_dir in &resolved_magdrive_dirs {
-                if let Ok(meta_dir) = ensure_cached_folder(&client, &state.folder_cache, magdrive_dir, "metadata").await {
-                    let _ = client.upload_file(&meta_dir, &meta_file_name, &meta_bytes).await;
+            for (idx, _target) in targets.iter().enumerate() {
+                // 1. Private metadata folder (for internal sync)
+                if let Some(magdrive_dir) = resolved_magdrive_dirs.get(idx) {
+                    if let Ok(meta_dir) = ensure_cached_folder(&client, &state.folder_cache, magdrive_dir, "metadata").await {
+                        let _ = client.upload_file(&meta_dir, &meta_file_name, &meta_bytes).await;
+                    }
+                }
+                // 2. Public package folder (for magnet downloads)
+                if let Some(pkg_dir) = resolved_chunks_dirs.get(idx) {
+                    let _ = client.upload_file(pkg_dir, "meta.enc", &meta_bytes).await;
                 }
             }
         }
     }
 
     if opt_in_seeding {
-        // Collect unique target IDs that actually store shards
-        let mut seeded_targets = HashSet::new();
-        for (_, target_id) in new_file_mapping.values() {
-            seeded_targets.insert(target_id.clone());
+        // Collect unique package folder IDs that store shards
+        let mut seeded_pkg_folders = HashSet::new();
+        for (idx, _) in targets.iter().enumerate() {
+            if let Some(pkg_dir) = resolved_chunks_dirs.get(idx) {
+                seeded_pkg_folders.insert(pkg_dir.clone());
+            }
         }
 
         let trackers = get_tracker_urls_from_db(&state.db);
         let topic = calculate_blind_topic(&package_id);
 
-        for target_id in seeded_targets {
-            let _ = client.set_folder_public_viewer(&target_id).await;
+        for pkg_folder_id in seeded_pkg_folders {
             let trackers_clone = trackers.clone();
             let topic_clone = topic.clone();
             tokio::spawn(async move {
-                announce_to_trackers(&trackers_clone, &topic_clone, &target_id, false).await;
+                announce_to_trackers(&trackers_clone, &topic_clone, &pkg_folder_id, false).await;
             });
         }
     }
@@ -2045,16 +2099,17 @@ pub async fn upload_file_package(
         "status": "transferring"
     }));
 
-    // Pre-resolve and cache chunks folders for all targets concurrently
+    // Pre-resolve and cache isolated package folders for all targets concurrently
     let mut chunks_dir_futures = Vec::new();
+    let pkg_id_for_dirs = package_id.clone();
     for (t_idx, target) in vault.targets.iter().enumerate() {
         let client_clone = clients[t_idx].clone();
         let target_id = target.target_id.clone();
         let cache = state.folder_cache.clone();
+        let pkg_id_clone = pkg_id_for_dirs.clone();
         chunks_dir_futures.push(async move {
-            let magdrive_dir = ensure_cached_folder(&client_clone, &cache, &target_id, ".magdrive").await?;
-            let chunks_dir = ensure_cached_folder(&client_clone, &cache, &magdrive_dir, "chunks").await?;
-            Ok::<String, String>(chunks_dir)
+            let pkg_dir = ensure_cached_package_folder(&client_clone, &cache, &target_id, &pkg_id_clone).await?;
+            Ok::<String, String>(pkg_dir)
         });
     }
     let target_chunks_dirs = futures::future::join_all(chunks_dir_futures).await;
@@ -2150,7 +2205,9 @@ pub async fn upload_file_package(
         "status": "finalizing"
     }));
 
-    // Encrypt and upload metadata manifest to all targets in parallel
+    // Encrypt and upload metadata manifest to all targets in parallel:
+    // 1) Private .magdrive/metadata/meta_<package_id>.enc for fast internal vault sync
+    // 2) Public package folder .magdrive/packages/<package_id>/meta.enc for magnet downloads
     let encrypted_manifest = manifest.encrypt(&key).map_err(|e| e.to_string())?;
     let meta_file_name = format!("meta_{}.enc", package_id);
 
@@ -2160,13 +2217,19 @@ pub async fn upload_file_package(
         let target_id = target.target_id.clone();
         let m_name = meta_file_name.clone();
         let m_bytes = encrypted_manifest.clone();
+        let pkg_id_clone = package_id.clone();
         let cache = state.folder_cache.clone();
 
         manifest_futures.push(async move {
+            // 1. Private metadata directory (for vault owner sync)
             if let Ok(magdrive_dir) = ensure_cached_folder(&client_clone, &cache, &target_id, ".magdrive").await {
                 if let Ok(meta_dir) = ensure_cached_folder(&client_clone, &cache, &magdrive_dir, "metadata").await {
                     let _ = client_clone.upload_file(&meta_dir, &m_name, &m_bytes).await;
                 }
+            }
+            // 2. Package directory (for magnet downloads)
+            if let Ok(pkg_dir) = ensure_cached_package_folder(&client_clone, &cache, &target_id, &pkg_id_clone).await {
+                let _ = client_clone.upload_file(&pkg_dir, "meta.enc", &m_bytes).await;
             }
         });
     }
@@ -2176,20 +2239,15 @@ pub async fn upload_file_package(
     state.db.upsert_package(&vault_id, &manifest).map_err(|e| e.to_string())?;
     let _ = state.db.set_package_key_enc(&package_id, &wrapped_key_b64);
 
-    // Set targets public viewer so other accounts can copy/download encrypted shards
-    for (t_idx, target) in vault.targets.iter().enumerate() {
-        let _ = clients[t_idx].set_folder_public_viewer(&target.target_id).await;
-    }
-
-    // Announce to swarm trackers
+    // Announce package folders to swarm trackers
     let trackers = get_tracker_urls_from_db(&state.db);
     let topic = calculate_blind_topic(&package_id);
-    for target in &vault.targets {
-        let t_id = target.target_id.clone();
+    for (t_idx, target) in vault.targets.iter().enumerate() {
+        let pkg_folder_id = resolved_chunks_dirs.get(t_idx).cloned().unwrap_or_else(|| target.target_id.clone());
         let tr_clone = trackers.clone();
         let top_clone = topic.clone();
         tokio::spawn(async move {
-            announce_to_trackers(&tr_clone, &top_clone, &t_id, true).await;
+            announce_to_trackers(&tr_clone, &top_clone, &pkg_folder_id, true).await;
         });
     }
 
@@ -2924,16 +2982,17 @@ pub async fn finish_upload_session(
         "status": "transferring"
     }));
 
-    // Pre-resolve and cache chunks folders for all targets concurrently
+    // Pre-resolve and cache isolated package folders for all targets concurrently
     let mut chunks_dir_futures = Vec::new();
+    let pkg_id_for_dirs = package_id.clone();
     for (t_idx, target) in vault.targets.iter().enumerate() {
         let client_clone = clients[t_idx].clone();
         let target_id = target.target_id.clone();
         let cache = state.folder_cache.clone();
+        let pkg_id_clone = pkg_id_for_dirs.clone();
         chunks_dir_futures.push(async move {
-            let magdrive_dir = ensure_cached_folder(&client_clone, &cache, &target_id, ".magdrive").await?;
-            let chunks_dir = ensure_cached_folder(&client_clone, &cache, &magdrive_dir, "chunks").await?;
-            Ok::<String, String>(chunks_dir)
+            let pkg_dir = ensure_cached_package_folder(&client_clone, &cache, &target_id, &pkg_id_clone).await?;
+            Ok::<String, String>(pkg_dir)
         });
     }
     let target_chunks_dirs = futures::future::join_all(chunks_dir_futures).await;
@@ -3057,7 +3116,9 @@ pub async fn finish_upload_session(
         "status": "finalizing"
     }));
 
-    // Encrypt and upload metadata manifest to all targets in parallel
+    // Encrypt and upload metadata manifest to all targets in parallel:
+    // 1) Private .magdrive/metadata/meta_<package_id>.enc for fast internal vault sync
+    // 2) Public package folder .magdrive/packages/<package_id>/meta.enc for magnet downloads
     let manifest_bytes = manifest.encrypt(&key).map_err(|e| e.to_string())?;
     let manifest_file_name = format!("meta_{}.enc", package_id);
 
@@ -3067,13 +3128,19 @@ pub async fn finish_upload_session(
         let target_id = target.target_id.clone();
         let m_name = manifest_file_name.clone();
         let m_bytes = manifest_bytes.clone();
+        let pkg_id_clone = package_id.clone();
         let cache = state.folder_cache.clone();
 
         manifest_futures.push(async move {
+            // 1. Private metadata directory (for vault owner sync)
             if let Ok(magdrive_dir) = ensure_cached_folder(&client_clone, &cache, &target_id, ".magdrive").await {
                 if let Ok(meta_dir) = ensure_cached_folder(&client_clone, &cache, &magdrive_dir, "metadata").await {
                     let _ = client_clone.upload_file(&meta_dir, &m_name, &m_bytes).await;
                 }
+            }
+            // 2. Package directory (for magnet downloads)
+            if let Ok(pkg_dir) = ensure_cached_package_folder(&client_clone, &cache, &target_id, &pkg_id_clone).await {
+                let _ = client_clone.upload_file(&pkg_dir, "meta.enc", &m_bytes).await;
             }
         });
     }
@@ -3082,20 +3149,15 @@ pub async fn finish_upload_session(
     state.db.upsert_package(&vault.id, &manifest).map_err(|e| e.to_string())?;
     let _ = state.db.set_package_key_enc(&package_id, &wrapped_key_b64);
 
-    // Set targets public viewer so other accounts can copy/download encrypted shards
-    for (t_idx, target) in vault.targets.iter().enumerate() {
-        let _ = clients[t_idx].set_folder_public_viewer(&target.target_id).await;
-    }
-
-    // Announce to swarm trackers
+    // Announce package folders to swarm trackers
     let trackers = get_tracker_urls_from_db(&state.db);
     let topic = calculate_blind_topic(&package_id);
-    for target in &vault.targets {
-        let t_id = target.target_id.clone();
+    for (t_idx, target) in vault.targets.iter().enumerate() {
+        let pkg_folder_id = resolved_chunks_dirs.get(t_idx).cloned().unwrap_or_else(|| target.target_id.clone());
         let tr_clone = trackers.clone();
         let top_clone = topic.clone();
         tokio::spawn(async move {
-            announce_to_trackers(&tr_clone, &top_clone, &t_id, true).await;
+            announce_to_trackers(&tr_clone, &top_clone, &pkg_folder_id, true).await;
         });
     }
 
@@ -3394,7 +3456,6 @@ pub async fn migrate_target_to_new(
     let client = get_drive_client(&state.db).await?;
 
     let new_magdrive = ensure_cached_folder(&client, &state.folder_cache, &new_target.target_id, ".magdrive").await?;
-    let new_chunks_dir = ensure_cached_folder(&client, &state.folder_cache, &new_magdrive, "chunks").await?;
     let new_meta_dir = ensure_cached_folder(&client, &state.folder_cache, &new_magdrive, "metadata").await?;
 
     let salt = hex::decode(&vault.salt_hex).unwrap_or_default();
@@ -3458,13 +3519,21 @@ pub async fn migrate_target_to_new(
                         },
                     );
 
+                    let target_pkg_dir = ensure_cached_package_folder(
+                        &client,
+                        &state.folder_cache,
+                        &new_target.target_id,
+                        &pkg.package_id,
+                    )
+                    .await?;
+
                     match transfer_or_reconstruct_shard(
                         &client,
                         &stripe_clone.chunks[c_idx],
                         &stripe_clone,
                         pkg,
                         s_idx,
-                        &new_chunks_dir,
+                        &target_pkg_dir,
                         &master_key,
                     )
                     .await
@@ -3501,6 +3570,14 @@ pub async fn migrate_target_to_new(
                 let _ = client
                     .upload_file(&new_meta_dir, &format!("meta_{}.enc", pkg.package_id), &enc_meta)
                     .await;
+                if let Ok(target_pkg_dir) = ensure_cached_package_folder(
+                    &client,
+                    &state.folder_cache,
+                    &new_target.target_id,
+                    &pkg.package_id,
+                ).await {
+                    let _ = client.upload_file(&target_pkg_dir, "meta.enc", &enc_meta).await;
+                }
             }
         }
     }
@@ -3521,9 +3598,6 @@ pub async fn migrate_target_to_new(
     }
     vault.targets = updated_targets;
     state.db.save_vault(&vault).map_err(|e| e.to_string())?;
-
-    // Set public viewer on new target
-    let _ = client.set_folder_public_viewer(&new_target.target_id).await;
 
     let _ = app.emit(
         "migration-progress",
@@ -3589,14 +3663,11 @@ pub async fn evacuate_target(
 
     let mut packages = state.db.list_packages(&vault_id).map_err(|e| e.to_string())?;
 
-    // Pre-resolve destination folders for all remaining targets
-    let mut target_chunks_dirs = HashMap::new();
+    // Pre-resolve metadata destination folders for all remaining targets
     let mut target_meta_dirs = HashMap::new();
     for t in &remaining_targets {
         let mag = ensure_cached_folder(&client, &state.folder_cache, &t.target_id, ".magdrive").await?;
-        let c_dir = ensure_cached_folder(&client, &state.folder_cache, &mag, "chunks").await?;
         let m_dir = ensure_cached_folder(&client, &state.folder_cache, &mag, "metadata").await?;
-        target_chunks_dirs.insert(t.target_id.clone(), c_dir);
         target_meta_dirs.insert(t.target_id.clone(), m_dir);
     }
 
@@ -3654,9 +3725,13 @@ pub async fn evacuate_target(
                         .find(|t| !used_targets.contains(t.target_id.as_str()))
                         .unwrap_or(&remaining_targets[(s_idx + c_idx) % remaining_targets.len()]);
 
-                    let dest_chunks_dir = target_chunks_dirs
-                        .get(&dest_target.target_id)
-                        .ok_or_else(|| "Chunks directory not found".to_string())?;
+                    let dest_chunks_dir = ensure_cached_package_folder(
+                        &client,
+                        &state.folder_cache,
+                        &dest_target.target_id,
+                        &pkg.package_id,
+                    )
+                    .await?;
 
                     let _ = app.emit(
                         "migration-progress",
@@ -3678,7 +3753,7 @@ pub async fn evacuate_target(
                         &stripe_clone,
                         pkg,
                         s_idx,
-                        dest_chunks_dir,
+                        &dest_chunks_dir,
                         &master_key,
                     )
                     .await
@@ -3718,6 +3793,14 @@ pub async fn evacuate_target(
                             .upload_file(m_dir, &format!("meta_{}.enc", pkg.package_id), &enc_meta)
                             .await;
                     }
+                    if let Ok(pkg_dir) = ensure_cached_package_folder(
+                        &client,
+                        &state.folder_cache,
+                        &t.target_id,
+                        &pkg.package_id,
+                    ).await {
+                        let _ = client.upload_file(&pkg_dir, "meta.enc", &enc_meta).await;
+                    }
                 }
             }
         }
@@ -3756,4 +3839,20 @@ pub async fn evacuate_target(
             current_chunk_idx, copied_count, relayed_count, reconstructed_count, failed_count
         ),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_validate_package_id() {
+        assert!(validate_package_id("pkg_12345_abc").is_ok());
+        assert!(validate_package_id("file-id-456").is_ok());
+        assert!(validate_package_id("").is_err());
+        assert!(validate_package_id("../escape").is_err());
+        assert!(validate_package_id("id with spaces").is_err());
+        assert!(validate_package_id("id/with/slash").is_err());
+        assert!(validate_package_id("id'with'quotes").is_err());
+    }
 }

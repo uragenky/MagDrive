@@ -40,7 +40,7 @@ magdrive/
 │   │   │   ├── mod.rs
 │   │   │   └── signature.rs           # Ed25519 digital signatures
 │   │   ├── drive/                     # Google Drive REST API & OAuth
-│   │   │   ├── client.rs              # Multi-tenant DriveClient pool, quota API, Shared Drive discovery & auto-folder provisioning
+│   │   │   ├── client.rs              # Multi-tenant DriveClient pool, isolated package storage, quota API, Shared Drive discovery & auto-folder provisioning
 │   │   │   ├── mod.rs
 │   │   │   ├── oauth.rs               # Loopback HTTP server & PKCE authorization
 │   │   │   └── permissions.rs         # Google Drive Permissions API (RBAC)
