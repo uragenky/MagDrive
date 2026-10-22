@@ -18,10 +18,23 @@ import {
   Share2,
   FileText,
   CloudUpload,
+  ShieldCheck,
+  Info,
+  ArrowLeftRight,
+  Loader2,
+  X,
 } from 'lucide-react';
 import { openUrl } from '@tauri-apps/plugin-opener';
 import { listen } from '@tauri-apps/api/event';
-import { VaultRecord, VaultTarget } from '../types';
+import {
+  VaultRecord,
+  VaultTarget,
+  GoogleUserProfile,
+  AdaptiveErasureInfo,
+  TargetMigrationStats,
+  MigrationProgressPayload,
+  TargetMigrationResult,
+} from '../types';
 import { api } from '../services/api';
 
 interface SettingsViewProps {
@@ -36,6 +49,8 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   const [clientId, setClientId] = useState('');
   const [clientSecret, setClientSecret] = useState('');
   const [isLoggedIn, setIsLoggedIn] = useState(false);
+  const [userProfile, setUserProfile] = useState<GoogleUserProfile | null>(null);
+  const [isLoadingProfile, setIsLoadingProfile] = useState(false);
   const [statusMsg, setStatusMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(
     null
   );
@@ -61,6 +76,22 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   const [newTargetLabel, setNewTargetLabel] = useState('');
   const [newTargetType, setNewTargetType] = useState<'SharedDrive' | 'SharedFolder'>('SharedFolder');
   const [isSavingTargets, setIsSavingTargets] = useState(false);
+  const [erasureInfo, setErasureInfo] = useState<AdaptiveErasureInfo | null>(null);
+
+  // Target Migration & Evacuation State
+  const [migrationTarget, setMigrationTarget] = useState<VaultTarget | null>(null);
+  const [migrationMode, setMigrationMode] = useState<'replace' | 'evacuate'>('replace');
+  const [migrationStats, setMigrationStats] = useState<TargetMigrationStats | null>(null);
+  const [isLoadingStats, setIsLoadingStats] = useState(false);
+  const [migrationNewName, setMigrationNewName] = useState('');
+  const [migrationNewType, setMigrationNewType] = useState<'SharedDrive' | 'SharedFolder'>('SharedFolder');
+  const [migrationNewId, setMigrationNewId] = useState('');
+  const [migrationDeleteOld, setMigrationDeleteOld] = useState(true);
+  const [migrationPassphrase, setMigrationPassphrase] = useState('');
+  const [isMigrating, setIsMigrating] = useState(false);
+  const [migrationProgress, setMigrationProgress] = useState<MigrationProgressPayload | null>(null);
+  const [migrationResult, setMigrationResult] = useState<TargetMigrationResult | null>(null);
+  const [migrationError, setMigrationError] = useState<string | null>(null);
 
   // Vault Backup Token Export state
   const [exportedToken, setExportedToken] = useState<string | null>(null);
@@ -85,6 +116,12 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
         type: 'success',
         text: 'Google account authenticated and connected successfully!',
       });
+      setIsLoadingProfile(true);
+      api
+        .getGoogleUserProfile()
+        .then((profile) => setUserProfile(profile))
+        .catch((e) => console.error(e))
+        .finally(() => setIsLoadingProfile(false));
     }).then((fn) => {
       unlisten = fn;
     });
@@ -100,6 +137,26 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     }
   }, [activeVault]);
 
+  useEffect(() => {
+    api
+      .getAdaptiveErasureInfo(targets.length)
+      .then((info) => setErasureInfo(info))
+      .catch((err) => console.error(err));
+  }, [targets.length]);
+
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    listen<MigrationProgressPayload>('migration-progress', (event) => {
+      setMigrationProgress(event.payload);
+    }).then((fn) => {
+      unlisten = fn;
+    });
+
+    return () => {
+      if (unlisten) unlisten();
+    };
+  }, []);
+
   const loadSettings = async () => {
     try {
       const gcp = await api.getGcpSettings();
@@ -109,6 +166,16 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
       }
       const logged = await api.checkLoginStatus();
       setIsLoggedIn(logged);
+      if (logged) {
+        setIsLoadingProfile(true);
+        api
+          .getGoogleUserProfile()
+          .then((profile) => setUserProfile(profile))
+          .catch((e) => console.error(e))
+          .finally(() => setIsLoadingProfile(false));
+      } else {
+        setUserProfile(null);
+      }
 
       const dlSettings = await api.getDownloadSettings();
       if (dlSettings) {
@@ -329,6 +396,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   const handleLogout = async () => {
     await api.logoutGoogle();
     setIsLoggedIn(false);
+    setUserProfile(null);
     setAuthUrlManual(null);
     setStatusMsg({ type: 'success', text: 'Successfully disconnected from Google account.' });
   };
@@ -363,6 +431,92 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     } finally {
       setIsSavingTargets(false);
     }
+  };
+
+  const handleOpenMigration = async (target: VaultTarget) => {
+    setMigrationTarget(target);
+    setMigrationMode('replace');
+    setMigrationNewName('');
+    setMigrationNewId('');
+    setMigrationPassphrase('');
+    setMigrationProgress(null);
+    setMigrationResult(null);
+    setMigrationError(null);
+    setIsLoadingStats(true);
+
+    if (activeVault) {
+      try {
+        const stats = await api.getTargetMigrationStats(activeVault.id, target.target_id);
+        setMigrationStats(stats);
+      } catch (err: any) {
+        console.error('Failed to get migration stats:', err);
+      } finally {
+        setIsLoadingStats(false);
+      }
+    }
+  };
+
+  const handleExecuteMigration = async () => {
+    if (!activeVault || !migrationTarget) return;
+
+    try {
+      setIsMigrating(true);
+      setMigrationError(null);
+      setMigrationResult(null);
+
+      let result: TargetMigrationResult;
+      if (migrationMode === 'replace') {
+        if (!migrationNewId.trim()) {
+          setMigrationError('Please provide the new Google Drive Folder or Drive ID.');
+          setIsMigrating(false);
+          return;
+        }
+
+        const newTarget: VaultTarget = {
+          target_id: migrationNewId.trim(),
+          target_type: migrationNewType,
+          label: migrationNewName.trim() || 'New Storage Target',
+        };
+
+        result = await api.migrateTargetToNew(
+          activeVault.id,
+          migrationTarget.target_id,
+          newTarget,
+          migrationDeleteOld,
+          migrationPassphrase || undefined
+        );
+      } else {
+        result = await api.evacuateTarget(
+          activeVault.id,
+          migrationTarget.target_id,
+          migrationDeleteOld,
+          migrationPassphrase || undefined
+        );
+      }
+
+      setMigrationResult(result);
+      if (result.success) {
+        // Refresh vault
+        const vaults = await api.listVaults();
+        const updated = vaults.find((v) => v.id === activeVault.id);
+        if (updated) {
+          setTargets(updated.targets);
+          await onUpdateVaultTargets(updated.targets);
+        }
+      }
+    } catch (err: any) {
+      setMigrationError(err?.toString() || 'Migration execution failed.');
+    } finally {
+      setIsMigrating(false);
+    }
+  };
+
+  const handleCloseMigration = () => {
+    if (isMigrating) return;
+    setMigrationTarget(null);
+    setMigrationProgress(null);
+    setMigrationResult(null);
+    setMigrationError(null);
   };
 
   return (
@@ -463,13 +617,28 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
           <div className="flex items-center justify-between">
             <div className="flex items-center space-x-3">
               <div
-                className={`w-3 h-3 rounded-full ${
+                className={`w-3 h-3 rounded-full shrink-0 ${
                   isLoggedIn ? 'bg-emerald-400 shadow-lg shadow-emerald-400/50' : 'bg-slate-600'
                 }`}
               />
-              <span className="text-xs font-medium text-slate-200">
-                {isLoggedIn ? 'Google Account Connected' : 'Not Connected'}
-              </span>
+              <div className="flex flex-col">
+                <span className="text-xs font-medium text-slate-200">
+                  {isLoggedIn ? 'Google Account Connected' : 'Not Connected'}
+                </span>
+                {isLoggedIn && userProfile && (
+                  <div className="flex items-center space-x-2 mt-0.5">
+                    <span className="text-xs font-semibold text-white">
+                      {userProfile.displayName}
+                    </span>
+                    <span className="text-[11px] text-slate-400 font-mono">
+                      ({userProfile.emailAddress})
+                    </span>
+                  </div>
+                )}
+                {isLoggedIn && !userProfile && isLoadingProfile && (
+                  <span className="text-[11px] text-slate-500 mt-0.5">Loading account info...</span>
+                )}
+              </div>
             </div>
 
             {isLoggedIn ? (
@@ -712,6 +881,81 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               </span>
             </div>
 
+            {/* Adaptive Erasure Scheme Info Banner */}
+            {erasureInfo && (
+              <div className="bg-slate-900/90 border border-cyan-500/30 rounded-xl p-4 space-y-3">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center space-x-2">
+                    <ShieldCheck className="w-4 h-4 text-cyan-400" />
+                    <span className="text-xs font-bold text-slate-100">
+                      Adaptive Erasure Coding Scheme
+                    </span>
+                  </div>
+                  <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-cyan-950 text-cyan-300 border border-cyan-800">
+                    Auto-Configured
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-center">
+                  <div className="bg-slate-950/80 border border-slate-800/80 rounded-lg p-2.5">
+                    <span className="text-[10px] text-slate-400 block uppercase tracking-wider font-semibold">Active Formula</span>
+                    <span className="text-sm font-bold text-cyan-400">
+                      {erasureInfo.data_shards} + {erasureInfo.parity_shards}
+                    </span>
+                    <span className="text-[10px] text-slate-500 block mt-0.5">
+                      ({erasureInfo.data_shards} Data, {erasureInfo.parity_shards} Parity)
+                    </span>
+                  </div>
+
+                  <div className="bg-slate-950/80 border border-slate-800/80 rounded-lg p-2.5">
+                    <span className="text-[10px] text-slate-400 block uppercase tracking-wider font-semibold">Fault Tolerance</span>
+                    <span className="text-sm font-bold text-emerald-400">
+                      {erasureInfo.fault_tolerance} {erasureInfo.fault_tolerance === 1 ? 'Target' : 'Targets'}
+                    </span>
+                    <span className="text-[10px] text-slate-500 block mt-0.5">
+                      {erasureInfo.fault_tolerance > 0 ? 'Survives total loss' : 'No redundancy'}
+                    </span>
+                  </div>
+
+                  <div className="bg-slate-950/80 border border-slate-800/80 rounded-lg p-2.5">
+                    <span className="text-[10px] text-slate-400 block uppercase tracking-wider font-semibold">Distribution</span>
+                    <span className="text-sm font-bold text-amber-400">
+                      1 Shard / Target
+                    </span>
+                    <span className="text-[10px] text-slate-500 block mt-0.5">
+                      Strict non-colocation
+                    </span>
+                  </div>
+
+                  <div className="bg-slate-950/80 border border-slate-800/80 rounded-lg p-2.5">
+                    <span className="text-[10px] text-slate-400 block uppercase tracking-wider font-semibold">Storage Overhead</span>
+                    <span className="text-sm font-bold text-purple-400">
+                      +{erasureInfo.overhead_percent}%
+                    </span>
+                    <span className="text-[10px] text-slate-500 block mt-0.5">
+                      Cloud quota usage
+                    </span>
+                  </div>
+                </div>
+
+                <div className="flex items-start space-x-2 text-[11px] text-slate-400 bg-slate-950/50 rounded-lg p-2 border border-slate-800/50">
+                  <Info className="w-4 h-4 text-cyan-400 shrink-0 mt-0.5" />
+                  <span>
+                    {erasureInfo.fault_tolerance > 0 ? (
+                      <>
+                        Each file stripe is partitioned across all connected storage targets. If up to{' '}
+                        <strong className="text-slate-200">{erasureInfo.fault_tolerance} Google account(s)</strong> are suspended or deleted, MagDrive will still reconstruct all files with zero data loss.
+                      </>
+                    ) : (
+                      <>
+                        With only 1 target connected, data is stored without redundancy. Connect 2 or more targets to enable Reed-Solomon parity and fault tolerance.
+                      </>
+                    )}
+                  </span>
+                </div>
+              </div>
+            )}
+
             {/* Existing Targets */}
             <div className="space-y-2">
               {targets.map((t, idx) => (
@@ -730,12 +974,23 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                       </div>
                     </div>
                   </div>
-                  <button
-                    onClick={() => handleRemoveTarget(idx)}
-                    className="p-1 rounded text-slate-500 hover:text-rose-400 transition-colors"
-                  >
-                    <Trash2 className="w-4 h-4" />
-                  </button>
+                  <div className="flex items-center space-x-1.5">
+                    <button
+                      onClick={() => handleOpenMigration(t)}
+                      title="Migrate or Evacuate Shards"
+                      className="flex items-center space-x-1 px-2.5 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-cyan-400 transition-colors text-[11px] font-medium"
+                    >
+                      <ArrowLeftRight className="w-3.5 h-3.5 text-cyan-400" />
+                      <span>Migrate</span>
+                    </button>
+                    <button
+                      onClick={() => handleRemoveTarget(idx)}
+                      title="Remove Target"
+                      className="p-1 rounded text-slate-500 hover:text-rose-400 transition-colors"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  </div>
                 </div>
               ))}
             </div>
@@ -884,6 +1139,312 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
           </div>
         )}
       </div>
+
+      {/* Target Migration & Evacuation Modal */}
+      {migrationTarget && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-slate-950 border border-slate-800 rounded-2xl max-w-xl w-full p-6 space-y-5 shadow-2xl overflow-y-auto max-h-[90vh]">
+            {/* Modal Header */}
+            <div className="flex items-center justify-between border-b border-slate-800/80 pb-3">
+              <div className="flex items-center space-x-2.5">
+                <div className="p-2 bg-cyan-950/60 border border-cyan-800/50 rounded-lg text-cyan-400">
+                  <ArrowLeftRight className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-bold text-slate-100">
+                    Target Migration &amp; Decommissioning
+                  </h3>
+                  <p className="text-[11px] text-slate-400 font-mono">
+                    {migrationTarget.label} • {migrationTarget.target_id}
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={handleCloseMigration}
+                disabled={isMigrating}
+                className="text-slate-500 hover:text-slate-300 disabled:opacity-50 transition-colors p-1"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Target Diagnostic Stats */}
+            <div className="bg-slate-900/80 border border-slate-800/80 rounded-xl p-3.5 space-y-2">
+              <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider block">
+                Target Storage Footprint
+              </span>
+              {isLoadingStats ? (
+                <div className="flex items-center space-x-2 text-xs text-slate-400 py-2">
+                  <Loader2 className="w-4 h-4 animate-spin text-cyan-400" />
+                  <span>Scanning vault packages and shard allocations...</span>
+                </div>
+              ) : migrationStats ? (
+                <div className="grid grid-cols-3 gap-2 text-center text-xs">
+                  <div className="bg-slate-950/80 p-2.5 rounded-lg border border-slate-800/60">
+                    <span className="text-[10px] text-slate-500 block">Shards on Target</span>
+                    <span className="text-sm font-bold text-cyan-400 font-mono">
+                      {migrationStats.chunks_on_target}
+                    </span>
+                  </div>
+                  <div className="bg-slate-950/80 p-2.5 rounded-lg border border-slate-800/60">
+                    <span className="text-[10px] text-slate-500 block">Affected Packages</span>
+                    <span className="text-sm font-bold text-slate-200 font-mono">
+                      {migrationStats.affected_packages}
+                    </span>
+                  </div>
+                  <div className="bg-slate-950/80 p-2.5 rounded-lg border border-slate-800/60">
+                    <span className="text-[10px] text-slate-500 block">Total Vault Shards</span>
+                    <span className="text-sm font-bold text-slate-400 font-mono">
+                      {migrationStats.total_vault_chunks}
+                    </span>
+                  </div>
+                </div>
+              ) : (
+                <div className="text-xs text-slate-500">No shard metadata found for this target.</div>
+              )}
+            </div>
+
+            {/* Mode Selector Tabs */}
+            <div className="grid grid-cols-2 gap-2 p-1 bg-slate-900 border border-slate-800 rounded-xl text-xs font-semibold">
+              <button
+                type="button"
+                onClick={() => setMigrationMode('replace')}
+                disabled={isMigrating}
+                className={`py-2 px-3 rounded-lg transition-colors flex items-center justify-center space-x-2 ${
+                  migrationMode === 'replace'
+                    ? 'bg-cyan-950 text-cyan-300 border border-cyan-800/60'
+                    : 'text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                <span>Replace with New Target</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setMigrationMode('evacuate')}
+                disabled={isMigrating || targets.length < 2}
+                className={`py-2 px-3 rounded-lg transition-colors flex items-center justify-center space-x-2 ${
+                  migrationMode === 'evacuate'
+                    ? 'bg-amber-950 text-amber-300 border border-amber-800/60'
+                    : 'text-slate-400 hover:text-slate-200 disabled:opacity-40 disabled:hover:text-slate-400'
+                }`}
+              >
+                <span>Evacuate &amp; Rebalance</span>
+              </button>
+            </div>
+
+            {/* Mode 1: Replace with New Target */}
+            {migrationMode === 'replace' && (
+              <div className="space-y-3 bg-slate-900/50 p-4 rounded-xl border border-slate-800/60 text-xs">
+                <span className="text-xs font-bold text-slate-200 block">
+                  New Replacement Target Credentials
+                </span>
+                <p className="text-[11px] text-slate-400">
+                  Shards on the old target will be migrated via Google fast-copy (or reconstructed via Reed-Solomon if the old account is lost). Once finished, the new target seamlessly replaces the old one.
+                </p>
+
+                <div className="space-y-2 pt-1">
+                  <div>
+                    <label className="text-[11px] text-slate-400 font-medium block mb-1">
+                      New Target Label
+                    </label>
+                    <input
+                      type="text"
+                      placeholder="e.g. My Backup Drive 2"
+                      value={migrationNewName}
+                      onChange={(e) => setMigrationNewName(e.target.value)}
+                      disabled={isMigrating}
+                      className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-cyan-500"
+                    />
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <label className="text-[11px] text-slate-400 font-medium block mb-1">
+                        Target Type
+                      </label>
+                      <select
+                        value={migrationNewType}
+                        onChange={(e) => setMigrationNewType(e.target.value as any)}
+                        disabled={isMigrating}
+                        className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-cyan-500"
+                      >
+                        <option value="SharedFolder">Personal Shared Folder</option>
+                        <option value="SharedDrive">Google Workspace Shared Drive</option>
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="text-[11px] text-slate-400 font-medium block mb-1">
+                        Drive / Folder ID
+                      </label>
+                      <input
+                        type="text"
+                        placeholder="Google Folder or Drive ID"
+                        value={migrationNewId}
+                        onChange={(e) => setMigrationNewId(e.target.value)}
+                        disabled={isMigrating}
+                        className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs text-slate-200 font-mono focus:outline-none focus:border-cyan-500"
+                      />
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Mode 2: Evacuate & Rebalance */}
+            {migrationMode === 'evacuate' && (
+              <div className="space-y-2 bg-amber-950/20 border border-amber-800/40 p-4 rounded-xl text-xs text-slate-300">
+                <span className="text-xs font-bold text-amber-300 block">
+                  Evacuate Without Replacement
+                </span>
+                <p className="text-[11px] text-slate-400">
+                  All {migrationStats?.chunks_on_target ?? 0} shard(s) hosted on this target will be relocated and rebalanced across the remaining {targets.length - 1} connected target(s). Once complete, this target is safely removed from the vault.
+                </p>
+                {targets.length < 2 && (
+                  <p className="text-[11px] text-rose-400 font-semibold">
+                    At least 2 targets are required in the vault to perform an evacuation.
+                  </p>
+                )}
+              </div>
+            )}
+
+            {/* Common Options */}
+            <div className="space-y-3 pt-1 border-t border-slate-800/60 text-xs">
+              <label className="flex items-center space-x-2 text-slate-300 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={migrationDeleteOld}
+                  onChange={(e) => setMigrationDeleteOld(e.target.checked)}
+                  disabled={isMigrating}
+                  className="rounded bg-slate-900 border-slate-700 text-cyan-500 focus:ring-0"
+                />
+                <span className="text-[11px]">
+                  Delete old shards from decommissioned drive after transfer (reclaim Google Drive quota)
+                </span>
+              </label>
+
+              <div>
+                <label className="text-[11px] text-slate-400 font-medium block mb-1">
+                  Vault Passphrase (Optional, required only for custom passphrase vaults)
+                </label>
+                <input
+                  type="password"
+                  placeholder="Leave blank if using default vault key"
+                  value={migrationPassphrase}
+                  onChange={(e) => setMigrationPassphrase(e.target.value)}
+                  disabled={isMigrating}
+                  className="w-full bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 text-xs text-slate-200 font-mono focus:outline-none focus:border-cyan-500"
+                />
+              </div>
+            </div>
+
+            {/* Progress Display */}
+            {isMigrating && migrationProgress && (
+              <div className="bg-slate-900/90 border border-cyan-800/40 rounded-xl p-4 space-y-3">
+                <div className="flex items-center justify-between text-xs">
+                  <div className="flex items-center space-x-2">
+                    <Loader2 className="w-4 h-4 animate-spin text-cyan-400" />
+                    <span className="font-semibold text-slate-200">
+                      {migrationProgress.message}
+                    </span>
+                  </div>
+                  <span className="font-mono text-cyan-400 font-bold">
+                    {migrationProgress.total_chunks > 0
+                      ? Math.round(
+                          (migrationProgress.current_chunk / migrationProgress.total_chunks) * 100
+                        )
+                      : 0}
+                    %
+                  </span>
+                </div>
+
+                <div className="w-full bg-slate-950 h-2 rounded-full overflow-hidden border border-slate-800">
+                  <div
+                    className="bg-gradient-to-r from-cyan-500 to-emerald-500 h-full transition-all duration-300"
+                    style={{
+                      width: `${
+                        migrationProgress.total_chunks > 0
+                          ? (migrationProgress.current_chunk / migrationProgress.total_chunks) * 100
+                          : 0
+                      }%`,
+                    }}
+                  />
+                </div>
+
+                <div className="flex items-center space-x-2 text-[10px] text-slate-400 font-mono">
+                  <span className="px-2 py-0.5 rounded bg-slate-950 border border-slate-800">
+                    Copied: {migrationProgress.copied_chunks}
+                  </span>
+                  <span className="px-2 py-0.5 rounded bg-slate-950 border border-slate-800">
+                    Relayed: {migrationProgress.relayed_chunks}
+                  </span>
+                  <span className="px-2 py-0.5 rounded bg-slate-950 border border-slate-800">
+                    Reconstructed: {migrationProgress.reconstructed_chunks}
+                  </span>
+                </div>
+              </div>
+            )}
+
+            {/* Result / Error Banner */}
+            {migrationResult && (
+              <div
+                className={`p-3 rounded-xl text-xs flex items-center space-x-2 border ${
+                  migrationResult.success
+                    ? 'bg-emerald-950/40 border-emerald-800/50 text-emerald-300'
+                    : 'bg-amber-950/40 border-amber-800/50 text-amber-300'
+                }`}
+              >
+                <CheckCircle2 className="w-4 h-4 shrink-0" />
+                <span>{migrationResult.message}</span>
+              </div>
+            )}
+
+            {migrationError && (
+              <div className="p-3 rounded-xl text-xs flex items-center space-x-2 bg-rose-950/40 border border-rose-800/50 text-rose-300">
+                <AlertCircle className="w-4 h-4 shrink-0" />
+                <span>{migrationError}</span>
+              </div>
+            )}
+
+            {/* Modal Actions */}
+            <div className="flex items-center justify-end space-x-2 pt-2 border-t border-slate-800/80">
+              <button
+                type="button"
+                onClick={handleCloseMigration}
+                disabled={isMigrating}
+                className="px-4 py-2 rounded-lg bg-slate-900 hover:bg-slate-800 text-slate-300 text-xs font-semibold transition-colors disabled:opacity-50"
+              >
+                {migrationResult ? 'Close' : 'Cancel'}
+              </button>
+              <button
+                type="button"
+                onClick={handleExecuteMigration}
+                disabled={
+                  isMigrating ||
+                  (migrationMode === 'replace' && !migrationNewId.trim()) ||
+                  (migrationMode === 'evacuate' && targets.length < 2)
+                }
+                className={`px-4 py-2 rounded-lg text-xs font-bold transition-colors flex items-center space-x-2 ${
+                  migrationMode === 'replace'
+                    ? 'bg-cyan-500 hover:bg-cyan-400 text-slate-950 disabled:bg-cyan-950 disabled:text-cyan-800'
+                    : 'bg-amber-500 hover:bg-amber-400 text-slate-950 disabled:bg-amber-950 disabled:text-amber-800'
+                }`}
+              >
+                {isMigrating ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    <span>Processing Migration...</span>
+                  </>
+                ) : (
+                  <span>
+                    {migrationMode === 'replace' ? 'Start Replacement' : 'Start Evacuation'}
+                  </span>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

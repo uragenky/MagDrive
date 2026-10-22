@@ -11,7 +11,8 @@
 - [System Architecture](#system-architecture)
 - [Cryptographic & Redundancy Design](#cryptographic--redundancy-design)
   - [Zero-Knowledge Encryption](#zero-knowledge-encryption)
-  - [Reed-Solomon Erasure Coding (RS 2+1)](#reed-solomon-erasure-coding-rs-21)
+  - [Adaptive Reed-Solomon Erasure Coding](#adaptive-reed-solomon-erasure-coding)
+  - [Target Migration & Decommissioning](#target-migration--decommissioning)
   - [Magnet Link Protocol](#magnet-link-protocol)
 - [Prerequisites](#prerequisites)
 - [Quick Start](#quick-start)
@@ -43,7 +44,11 @@ Files uploaded through MagDrive are:
 - **Decentralized Swarm Mirroring**: Converts Google Drive into a BitTorrent-like resilient swarm. Users can replicate shards directly between Google Drives (`files.copy`) server-side within seconds without consuming local internet bandwidth.
 - **Serverless Multi-Tracker Coordination**: Lightweight zero-knowledge blind tracker (built for Vercel + Turso libSQL) maps blind HMAC-SHA256 package topics to active mirror drives without ever exposing file names, contents, or decryption keys.
 - **Multi-Source Failover & Anti-Quota Exceeded**: Automatically searches across multiple Google Drive mirrors. If a primary target hits Google's HTTP 403 download quota, the client immediately falls back to active mirrors.
-- **Auto-Recovery & Self-Healing**: Loss of any single storage target (HTTP 404/403) triggers real-time Galois Field $GF(2^8)$ reconstruction from parity blocks.
+- **Auto-Recovery & Self-Healing**: Loss of any storage target triggers real-time Galois Field $GF(2^8)$ reconstruction from surviving data and parity blocks.
+- **Dynamic Adaptive Erasure Coding**: Automatically computes the mathematically optimal $(D + P)$ Reed-Solomon scheme based on connected storage targets ($N \le 1 \to 1+0$, $N=2 \to 1+1$, $N=3 \to 2+1$, $N=4 \to 3+1$, $N=5 \to 3+2$, $N=6 \to 4+2$, $N=7 \to 5+2$, $N=8 \to 6+2$, $N \ge 9 \to N-3+3$). Enforces strict non-colocation ($1 \text{ shard per target}$) so total loss of up to $P$ Google accounts produces zero data loss.
+- **Multi-Stripe Balanced Target Rotation**: Rotates target placement per stripe `(stripe_index + shard_index) % targets.len()`, evenly balancing storage quota and network transfer volume across all connected Google Drives.
+- **Full Target Migration & Evacuation Engine**: 3-layer resilient shard migration (`files.copy` cloud fast-copy $\to$ direct relay download/upload $\to$ Reed-Solomon self-healing reconstruct from surviving shards). Supports replacing decommissioned drives with a new account or evacuating and rebalancing shards across remaining drives with optional old shard cleanup.
+- **Google Account Profile Status**: Displays authenticated Google account display name and email address directly within settings.
 - **Multi-Target Storage Abstraction**: Works transparently with Google Workspace Shared Drives (`supportsAllDrives=true`) or regular Shared Folders on `@gmail.com` personal accounts.
 - **Integrated Google Permissions RBAC**: Group administrators can invite or revoke member emails from the Shared Drive directly within the app via the Google Drive Permissions API.
 - **Local SQLite Cache**: File lists, metadata, and transfer queues are indexed locally for zero-latency searching and offline catalog browsing.
@@ -108,14 +113,31 @@ Files uploaded through MagDrive are:
 - **Payload Encryption**: Each chunk has an independent 12-byte random cryptographic nonce and is encrypted with `AES-256-GCM`. The resulting binary payload layout is `[12-byte Nonce][Ciphertext + 16-byte Tag]`.
 - **Digital Signatures**: Uploader generates an `Ed25519` keypair. File deletion commands require a valid cryptographic signature to prevent unauthorized deletions by other standard members.
 
-### Reed-Solomon Erasure Coding (RS 2+1)
-- For vaults configured with 3 targets:
-  - Data is split into $K=2$ equal-sized data shards.
-  - $M=1$ parity shard is calculated via Galois Field arithmetic.
-  - Shard 0 $\rightarrow$ Target 1 (Drive A).
-  - Shard 1 $\rightarrow$ Target 2 (Drive B).
-  - Shard 2 (Parity) $\rightarrow$ Target 3 (Drive C).
-- **Failure Tolerance**: If Drive A is deleted or inaccessible, the client downloads Shard 1 and Shard 2, mathematically recovering Shard 0 instantly in memory without interrupting playback or file saving.
+### Adaptive Reed-Solomon Erasure Coding
+- **Dynamic $(D + P)$ Calculation**:
+  - The number of data shards ($D$) and parity shards ($P$) scales dynamically with connected storage targets $N$:
+    - $N = 1 \implies 1 + 0$ (single drive, no parity)
+    - $N = 2 \implies 1 + 1$ (mirroring, survives 1 dead drive)
+    - $N = 3 \implies 2 + 1$ (survives 1 dead drive, +50% overhead)
+    - $N = 4 \implies 3 + 1$ (survives 1 dead drive, +33% overhead)
+    - $N = 5 \implies 3 + 2$ (survives 2 dead drives, +66% overhead)
+    - $N = 6 \implies 4 + 2$ (survives 2 dead drives, +50% overhead)
+    - $N = 7 \implies 5 + 2$ (survives 2 dead drives, +40% overhead)
+    - $N = 8 \implies 6 + 2$ (survives 2 dead drives, +33% overhead)
+    - $N \ge 9 \implies (N - 3) + 3$ (survives 3 dead drives)
+- **Strict Non-Colocation Guarantee**: Because $D + P \le N$, no single Google Drive target hosts more than 1 shard per stripe.
+- **Balanced Target Rotation**: Shards are placed using `(stripe_index + shard_index) % targets.len()`, distributing storage footprint and API quota consumption equally across all connected targets.
+- **Failure Tolerance**: If up to $P$ storage targets are permanently deleted, suspended, or hit quota limits, the client reconstructs missing shards on-the-fly via Galois Field $GF(2^8)$ matrix inversion.
+
+### Target Migration & Decommissioning
+- **3-Layer Resilient Shard Relocation**:
+  1. *Server-Side Fast Copy*: Uses Google Drive `files.copy` for instant cloud-to-cloud replication without client bandwidth consumption.
+  2. *Direct Download & Upload Relay*: If cross-domain permissions prevent server-side copy, shards are relayed through the local client.
+  3. *Reed-Solomon Self-Healing Reconstruct*: If the old drive is completely suspended, banned, or inaccessible, the engine downloads surviving shards from other active targets, decodes the original stripe, re-encodes the missing shard, and uploads it to the replacement target.
+- **Replace vs. Evacuate**:
+  - *Replace*: Migrates all shards from an old target to a new target account and updates the vault configuration.
+  - *Evacuate & Rebalance*: Relocates shards from a retiring drive across the remaining drives in the vault (requires at least 2 targets).
+- **Quota Cleanup**: Optionally deletes migrated shards from the old drive to reclaim storage quota.
 
 ### Magnet Link Protocol
 MagDrive uses self-describing, swarm-aware URIs:

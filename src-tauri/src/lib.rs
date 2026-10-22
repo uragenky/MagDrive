@@ -43,6 +43,7 @@ pub fn run() {
             commands::resolve_download_path,
             commands::start_google_login,
             commands::check_login_status,
+            commands::get_google_user_profile,
             commands::logout_google,
             commands::create_vault,
             commands::list_vaults,
@@ -78,6 +79,10 @@ pub fn run() {
             commands::copy_shards_to_my_drive,
             commands::get_tracker_settings,
             commands::save_tracker_settings,
+            commands::get_adaptive_erasure_info,
+            commands::get_target_migration_stats,
+            commands::migrate_target_to_new,
+            commands::evacuate_target,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

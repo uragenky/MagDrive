@@ -45,6 +45,18 @@ pub struct DriveFileItem {
     pub modified_time: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DriveAboutUser {
+    pub display_name: String,
+    pub email_address: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct DriveAboutResponse {
+    user: DriveAboutUser,
+}
+
 #[derive(Debug, Deserialize)]
 struct DriveFileListResponse {
     #[serde(default)]
@@ -586,6 +598,39 @@ impl DriveClient {
         let status = res.status();
         if status.is_success() {
             Ok(())
+        } else {
+            let msg = res.text().await.unwrap_or_default();
+            Err(DriveError::ApiError {
+                status: status.as_u16(),
+                message: msg,
+            })
+        }
+    }
+
+    /// Fetches the authenticated user's profile info (display name and email address)
+    pub async fn get_user_profile(&self) -> Result<DriveAboutUser, DriveError> {
+        let url = "https://www.googleapis.com/drive/v3/about?fields=user(displayName,emailAddress)";
+
+        let mut res = self
+            .client
+            .get(url)
+            .headers(self.auth_headers())
+            .send()
+            .await?;
+
+        if res.status().as_u16() == 401 && self.try_refresh_token().await {
+            res = self
+                .client
+                .get(url)
+                .headers(self.auth_headers())
+                .send()
+                .await?;
+        }
+
+        let status = res.status();
+        if status.is_success() {
+            let about: DriveAboutResponse = res.json().await?;
+            Ok(about.user)
         } else {
             let msg = res.text().await.unwrap_or_default();
             Err(DriveError::ApiError {

@@ -16,10 +16,10 @@ use crate::crypto::argon::{derive_master_key, generate_salt};
 use crate::crypto::signature::Keypair;
 use crate::crypto::compute_sha256;
 use crate::crypto::aes::{encrypt_chunk, decrypt_chunk};
-use crate::drive::client::DriveClient;
+use crate::drive::client::{DriveClient, DriveAboutUser};
 use crate::drive::oauth::{start_oauth_flow, GcpCredentials};
 use crate::drive::permissions::DrivePermissionItem;
-use crate::erasure::rs::{encode, reconstruct};
+use crate::erasure::rs::{encode, reconstruct, calculate_adaptive_erasure_schema};
 use crate::magnet::parser::{generate_swarm_magnet_link, parse_magnet_link, MagnetInfo};
 use crate::storage::db::{Database, TransferRecord};
 use crate::tracker::{announce_to_trackers, calculate_blind_topic, fetch_peers_multi, report_dead_multi};
@@ -72,6 +72,48 @@ pub struct DownloadSettings {
 pub struct DownloadResult {
     pub destination_path: String,
     pub total_bytes: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AdaptiveErasureInfo {
+    pub num_targets: usize,
+    pub data_shards: usize,
+    pub parity_shards: usize,
+    pub total_shards: usize,
+    pub fault_tolerance: usize,
+    pub overhead_percent: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TargetMigrationStats {
+    pub target_id: String,
+    pub total_packages: usize,
+    pub affected_packages: usize,
+    pub chunks_on_target: usize,
+    pub total_vault_chunks: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MigrationProgressPayload {
+    pub stage: String,
+    pub current_chunk: usize,
+    pub total_chunks: usize,
+    pub copied_chunks: usize,
+    pub relayed_chunks: usize,
+    pub reconstructed_chunks: usize,
+    pub current_package_name: String,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TargetMigrationResult {
+    pub success: bool,
+    pub total_migrated: usize,
+    pub copied_count: usize,
+    pub relayed_count: usize,
+    pub reconstructed_count: usize,
+    pub failed_count: usize,
+    pub message: String,
 }
 
 #[derive(Debug, Clone)]
@@ -344,6 +386,22 @@ pub async fn check_login_status(state: State<'_, AppState>) -> Result<bool, Stri
     match get_drive_client(&state.db).await {
         Ok(_) => Ok(true),
         Err(_) => Ok(false),
+    }
+}
+
+#[tauri::command]
+pub async fn get_google_user_profile(state: State<'_, AppState>) -> Result<Option<DriveAboutUser>, String> {
+    let client = match get_drive_client(&state.db).await {
+        Ok(c) => c,
+        Err(_) => return Ok(None),
+    };
+
+    match client.get_user_profile().await {
+        Ok(profile) => Ok(Some(profile)),
+        Err(e) => {
+            eprintln!("Failed to fetch Google user profile: {}", e);
+            Ok(None)
+        }
     }
 }
 
@@ -1497,7 +1555,7 @@ async fn process_stripe_task(
     // 3. Upload all shards of this stripe concurrently across targets
     let mut shard_futures = Vec::new();
     for (shard_idx, encrypted_shard, shard_sha, chunk_file_name) in crypto_results {
-        let target_idx = shard_idx % targets.len();
+        let target_idx = (s_idx + shard_idx) % targets.len();
         let target = targets[target_idx].clone();
         let chunks_sub = resolved_chunks_dirs[target_idx].clone();
         let client_clone = client.clone();
@@ -1596,13 +1654,7 @@ pub async fn upload_file_package(
     let uploader_pubkey = state.keypair.lock().unwrap().public_key_hex();
 
     // Determine Reed-Solomon scheme based on target count
-    let (data_shards, parity_shards) = if vault.targets.len() >= 3 {
-        (2, 1)
-    } else if vault.targets.len() == 2 {
-        (1, 1)
-    } else {
-        (1, 0)
-    };
+    let (data_shards, parity_shards) = calculate_adaptive_erasure_schema(vault.targets.len());
 
     let client = get_drive_client(&state.db).await?;
 
@@ -2505,13 +2557,7 @@ pub async fn finish_upload_session(
 
     let uploader_pubkey = state.keypair.lock().unwrap().public_key_hex();
 
-    let (data_shards, parity_shards) = if vault.targets.len() >= 3 {
-        (2, 1)
-    } else if vault.targets.len() == 2 {
-        (1, 1)
-    } else {
-        (1, 0)
-    };
+    let (data_shards, parity_shards) = calculate_adaptive_erasure_schema(vault.targets.len());
 
     let client = get_drive_client(&state.db).await?;
     let chunk_size = session.chunk_size;
@@ -2813,4 +2859,555 @@ pub async fn delete_transfer(state: State<'_, AppState>, transfer_id: String) ->
 #[tauri::command]
 pub async fn clear_finished_transfers(state: State<'_, AppState>) -> Result<(), String> {
     state.db.clear_finished_transfers().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn get_adaptive_erasure_info(targets_count: usize) -> AdaptiveErasureInfo {
+    let (data_shards, parity_shards) = calculate_adaptive_erasure_schema(targets_count);
+    let total_shards = data_shards + parity_shards;
+    let fault_tolerance = parity_shards;
+    let overhead_percent = if data_shards > 0 {
+        (parity_shards * 100) / data_shards
+    } else {
+        0
+    };
+
+    AdaptiveErasureInfo {
+        num_targets: targets_count,
+        data_shards,
+        parity_shards,
+        total_shards,
+        fault_tolerance,
+        overhead_percent,
+    }
+}
+
+// ----------------------------------------------------
+// Target Migration & Evacuation Engine
+// ----------------------------------------------------
+
+async fn transfer_or_reconstruct_shard(
+    client: &DriveClient,
+    chunk: &ChunkRef,
+    stripe: &Stripe,
+    pkg: &PackageManifest,
+    stripe_idx: usize,
+    dest_chunks_dir: &str,
+    master_key: &[u8; 32],
+) -> Result<(String, String), String> {
+    let chunk_file_name = format!("chunk_{}_{}.bin", pkg.package_id, chunk.sha256);
+
+    // Attempt 1: Fast Google Drive server-side copy
+    if let Ok(copied) = client
+        .copy_file(&chunk.file_id, dest_chunks_dir, Some(&chunk_file_name))
+        .await
+    {
+        return Ok((copied.id, "copied".to_string()));
+    }
+
+    // Attempt 2: Direct download & upload relay
+    if let Ok(downloaded_bytes) = client.download_file(&chunk.file_id).await {
+        if let Ok(uploaded_id) = client
+            .upload_file(dest_chunks_dir, &chunk_file_name, &downloaded_bytes)
+            .await
+        {
+            return Ok((uploaded_id, "relayed".to_string()));
+        }
+    }
+
+    // Attempt 3: Reed-Solomon reconstruct & re-encode from surviving shards
+    let schema = &pkg.erasure_schema;
+    let total_shards = schema.data_shards + schema.parity_shards;
+    let mut available_shards: Vec<Option<Vec<u8>>> = vec![None; total_shards];
+
+    let mut dl_futures = futures::stream::FuturesUnordered::new();
+    for other_chunk in &stripe.chunks {
+        if other_chunk.file_id != chunk.file_id && other_chunk.shard_index < total_shards {
+            let client_clone = client.clone();
+            let f_id = other_chunk.file_id.clone();
+            let s_idx = other_chunk.shard_index;
+            let key_clone = *master_key;
+            dl_futures.push(async move {
+                if let Ok(enc_bytes) = client_clone.download_file(&f_id).await {
+                    if let Ok(dec) = decrypt_chunk(&enc_bytes, &key_clone) {
+                        return Some((s_idx, dec));
+                    }
+                }
+                None
+            });
+        }
+    }
+
+    while let Some(res) = dl_futures.next().await {
+        if let Some((s_idx, dec)) = res {
+            available_shards[s_idx] = Some(dec);
+        }
+    }
+
+    let present_count = available_shards.iter().filter(|s| s.is_some()).count();
+    if present_count < schema.data_shards {
+        return Err(format!(
+            "Cannot reconstruct shard {}: insufficient surviving shards (have {}, need {})",
+            chunk.shard_index, present_count, schema.data_shards
+        ));
+    }
+
+    let total_stripes = pkg.stripes.len();
+    let stripe_len = if stripe_idx == total_stripes - 1 {
+        let rem = (pkg.total_size as usize) % pkg.chunk_size;
+        if rem == 0 {
+            pkg.chunk_size
+        } else {
+            rem
+        }
+    } else {
+        pkg.chunk_size
+    };
+
+    let data_shards = schema.data_shards;
+    let parity_shards = schema.parity_shards;
+    let reconstructed_plain = reconstruct(
+        &mut available_shards,
+        data_shards,
+        parity_shards,
+        stripe_len,
+    )
+    .map_err(|e| format!("Reconstruction error: {}", e))?;
+
+    let (all_encoded_shards, _) = encode(&reconstructed_plain, data_shards, parity_shards)
+        .map_err(|e| format!("Re-encoding error: {}", e))?;
+
+    if chunk.shard_index >= all_encoded_shards.len() {
+        return Err(format!("Shard index {} out of range", chunk.shard_index));
+    }
+
+    let missing_shard_data = &all_encoded_shards[chunk.shard_index];
+    let encrypted_shard = encrypt_chunk(missing_shard_data, master_key)
+        .map_err(|e| format!("Encryption error: {}", e))?;
+
+    let uploaded_id = client
+        .upload_file(dest_chunks_dir, &chunk_file_name, &encrypted_shard)
+        .await
+        .map_err(|e| format!("Failed to upload reconstructed shard: {}", e))?;
+
+    Ok((uploaded_id, "reconstructed".to_string()))
+}
+
+#[tauri::command]
+pub async fn get_target_migration_stats(
+    state: State<'_, AppState>,
+    vault_id: String,
+    source_target_id: String,
+) -> Result<TargetMigrationStats, String> {
+    let packages = state.db.list_packages(&vault_id).map_err(|e| e.to_string())?;
+    let mut affected_packages = 0;
+    let mut chunks_on_target = 0;
+    let mut total_vault_chunks = 0;
+
+    for pkg in &packages {
+        let mut pkg_affected = false;
+        for stripe in &pkg.stripes {
+            for chunk in &stripe.chunks {
+                total_vault_chunks += 1;
+                if chunk.target_id == source_target_id {
+                    chunks_on_target += 1;
+                    pkg_affected = true;
+                }
+            }
+        }
+        if pkg_affected {
+            affected_packages += 1;
+        }
+    }
+
+    Ok(TargetMigrationStats {
+        target_id: source_target_id,
+        total_packages: packages.len(),
+        affected_packages,
+        chunks_on_target,
+        total_vault_chunks,
+    })
+}
+
+#[tauri::command]
+pub async fn migrate_target_to_new(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    vault_id: String,
+    source_target_id: String,
+    new_target: VaultTarget,
+    delete_old_shards: bool,
+    passphrase: Option<String>,
+) -> Result<TargetMigrationResult, String> {
+    let mut vault = state
+        .db
+        .get_vault(&vault_id)
+        .map_err(|e| e.to_string())?
+        .ok_or("Active vault not found")?;
+
+    let client = get_drive_client(&state.db).await?;
+
+    let new_magdrive = ensure_cached_folder(&client, &state.folder_cache, &new_target.target_id, ".magdrive").await?;
+    let new_chunks_dir = ensure_cached_folder(&client, &state.folder_cache, &new_magdrive, "chunks").await?;
+    let new_meta_dir = ensure_cached_folder(&client, &state.folder_cache, &new_magdrive, "metadata").await?;
+
+    let salt = hex::decode(&vault.salt_hex).unwrap_or_default();
+    let master_key = get_or_derive_master_key(&state.key_cache, &vault_id, passphrase.as_deref().unwrap_or(""), &salt)?;
+
+    let mut packages = state.db.list_packages(&vault_id).map_err(|e| e.to_string())?;
+
+    // Count total chunks to migrate
+    let mut total_chunks_to_migrate = 0;
+    for pkg in &packages {
+        for stripe in &pkg.stripes {
+            for chunk in &stripe.chunks {
+                if chunk.target_id == source_target_id {
+                    total_chunks_to_migrate += 1;
+                }
+            }
+        }
+    }
+
+    let _ = app.emit(
+        "migration-progress",
+        MigrationProgressPayload {
+            stage: "analyzing".into(),
+            current_chunk: 0,
+            total_chunks: total_chunks_to_migrate,
+            copied_chunks: 0,
+            relayed_chunks: 0,
+            reconstructed_chunks: 0,
+            current_package_name: "".into(),
+            message: format!("Identified {} chunks to migrate to {}", total_chunks_to_migrate, new_target.label),
+        },
+    );
+
+    let mut copied_count = 0;
+    let mut relayed_count = 0;
+    let mut reconstructed_count = 0;
+    let mut failed_count = 0;
+    let mut current_chunk_idx = 0;
+
+    for pkg in &mut packages {
+        let mut pkg_modified = false;
+
+        for s_idx in 0..pkg.stripes.len() {
+            let stripe_clone = pkg.stripes[s_idx].clone();
+            for c_idx in 0..pkg.stripes[s_idx].chunks.len() {
+                if pkg.stripes[s_idx].chunks[c_idx].target_id == source_target_id {
+                    current_chunk_idx += 1;
+                    let old_file_id = pkg.stripes[s_idx].chunks[c_idx].file_id.clone();
+
+                    let _ = app.emit(
+                        "migration-progress",
+                        MigrationProgressPayload {
+                            stage: "migrating".into(),
+                            current_chunk: current_chunk_idx,
+                            total_chunks: total_chunks_to_migrate,
+                            copied_chunks: copied_count,
+                            relayed_chunks: relayed_count,
+                            reconstructed_chunks: reconstructed_count,
+                            current_package_name: pkg.name.clone(),
+                            message: format!("Migrating shard {}/{} ({})", current_chunk_idx, total_chunks_to_migrate, pkg.name),
+                        },
+                    );
+
+                    match transfer_or_reconstruct_shard(
+                        &client,
+                        &stripe_clone.chunks[c_idx],
+                        &stripe_clone,
+                        pkg,
+                        s_idx,
+                        &new_chunks_dir,
+                        &master_key,
+                    )
+                    .await
+                    {
+                        Ok((new_file_id, method)) => {
+                            if method == "copied" {
+                                copied_count += 1;
+                            } else if method == "relayed" {
+                                relayed_count += 1;
+                            } else {
+                                reconstructed_count += 1;
+                            }
+
+                            pkg.stripes[s_idx].chunks[c_idx].target_id = new_target.target_id.clone();
+                            pkg.stripes[s_idx].chunks[c_idx].file_id = new_file_id;
+                            pkg_modified = true;
+
+                            if delete_old_shards {
+                                let _ = client.delete_file(&old_file_id).await;
+                            }
+                        }
+                        Err(e) => {
+                            failed_count += 1;
+                            eprintln!("Failed migrating shard {}: {}", old_file_id, e);
+                        }
+                    }
+                }
+            }
+        }
+
+        if pkg_modified {
+            let _ = state.db.update_package_stripes(&pkg.package_id, &pkg.stripes);
+            if let Ok(enc_meta) = pkg.encrypt(&master_key) {
+                let _ = client
+                    .upload_file(&new_meta_dir, &format!("meta_{}.enc", pkg.package_id), &enc_meta)
+                    .await;
+            }
+        }
+    }
+
+    // Replace target in VaultRecord
+    let mut updated_targets = Vec::new();
+    let mut replaced = false;
+    for t in vault.targets {
+        if t.target_id == source_target_id {
+            updated_targets.push(new_target.clone());
+            replaced = true;
+        } else {
+            updated_targets.push(t);
+        }
+    }
+    if !replaced {
+        updated_targets.push(new_target.clone());
+    }
+    vault.targets = updated_targets;
+    state.db.save_vault(&vault).map_err(|e| e.to_string())?;
+
+    // Set public viewer on new target
+    let _ = client.set_folder_public_viewer(&new_target.target_id).await;
+
+    let _ = app.emit(
+        "migration-progress",
+        MigrationProgressPayload {
+            stage: "completed".into(),
+            current_chunk: current_chunk_idx,
+            total_chunks: total_chunks_to_migrate,
+            copied_chunks: copied_count,
+            relayed_chunks: relayed_count,
+            reconstructed_chunks: reconstructed_count,
+            current_package_name: "".into(),
+            message: format!(
+                "Migration finished: {} shards migrated ({} server-side copied, {} relayed, {} reconstructed)",
+                current_chunk_idx, copied_count, relayed_count, reconstructed_count
+            ),
+        },
+    );
+
+    Ok(TargetMigrationResult {
+        success: failed_count == 0,
+        total_migrated: current_chunk_idx,
+        copied_count,
+        relayed_count,
+        reconstructed_count,
+        failed_count,
+        message: format!(
+            "Migration completed: {} migrated ({} copied, {} relayed, {} reconstructed), {} failed",
+            current_chunk_idx, copied_count, relayed_count, reconstructed_count, failed_count
+        ),
+    })
+}
+
+#[tauri::command]
+pub async fn evacuate_target(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    vault_id: String,
+    source_target_id: String,
+    delete_old_shards: bool,
+    passphrase: Option<String>,
+) -> Result<TargetMigrationResult, String> {
+    let mut vault = state
+        .db
+        .get_vault(&vault_id)
+        .map_err(|e| e.to_string())?
+        .ok_or("Active vault not found")?;
+
+    let remaining_targets: Vec<VaultTarget> = vault
+        .targets
+        .iter()
+        .filter(|t| t.target_id != source_target_id)
+        .cloned()
+        .collect();
+
+    if remaining_targets.is_empty() {
+        return Err("Cannot evacuate the last remaining storage target in the vault.".into());
+    }
+
+    let client = get_drive_client(&state.db).await?;
+
+    let salt = hex::decode(&vault.salt_hex).unwrap_or_default();
+    let master_key = get_or_derive_master_key(&state.key_cache, &vault_id, passphrase.as_deref().unwrap_or(""), &salt)?;
+
+    let mut packages = state.db.list_packages(&vault_id).map_err(|e| e.to_string())?;
+
+    // Pre-resolve destination folders for all remaining targets
+    let mut target_chunks_dirs = HashMap::new();
+    let mut target_meta_dirs = HashMap::new();
+    for t in &remaining_targets {
+        let mag = ensure_cached_folder(&client, &state.folder_cache, &t.target_id, ".magdrive").await?;
+        let c_dir = ensure_cached_folder(&client, &state.folder_cache, &mag, "chunks").await?;
+        let m_dir = ensure_cached_folder(&client, &state.folder_cache, &mag, "metadata").await?;
+        target_chunks_dirs.insert(t.target_id.clone(), c_dir);
+        target_meta_dirs.insert(t.target_id.clone(), m_dir);
+    }
+
+    let mut total_chunks_to_evacuate = 0;
+    for pkg in &packages {
+        for stripe in &pkg.stripes {
+            for chunk in &stripe.chunks {
+                if chunk.target_id == source_target_id {
+                    total_chunks_to_evacuate += 1;
+                }
+            }
+        }
+    }
+
+    let _ = app.emit(
+        "migration-progress",
+        MigrationProgressPayload {
+            stage: "analyzing".into(),
+            current_chunk: 0,
+            total_chunks: total_chunks_to_evacuate,
+            copied_chunks: 0,
+            relayed_chunks: 0,
+            reconstructed_chunks: 0,
+            current_package_name: "".into(),
+            message: format!("Evacuating {} chunks across {} remaining targets", total_chunks_to_evacuate, remaining_targets.len()),
+        },
+    );
+
+    let mut copied_count = 0;
+    let mut relayed_count = 0;
+    let mut reconstructed_count = 0;
+    let mut failed_count = 0;
+    let mut current_chunk_idx = 0;
+
+    for pkg in &mut packages {
+        let mut pkg_modified = false;
+
+        for s_idx in 0..pkg.stripes.len() {
+            let stripe_clone = pkg.stripes[s_idx].clone();
+            for c_idx in 0..pkg.stripes[s_idx].chunks.len() {
+                if pkg.stripes[s_idx].chunks[c_idx].target_id == source_target_id {
+                    current_chunk_idx += 1;
+                    let old_file_id = pkg.stripes[s_idx].chunks[c_idx].file_id.clone();
+
+                    // Choose destination target among remaining_targets
+                    let used_targets: HashSet<&str> = stripe_clone
+                        .chunks
+                        .iter()
+                        .filter(|c| c.target_id != source_target_id)
+                        .map(|c| c.target_id.as_str())
+                        .collect();
+
+                    let dest_target = remaining_targets
+                        .iter()
+                        .find(|t| !used_targets.contains(t.target_id.as_str()))
+                        .unwrap_or(&remaining_targets[(s_idx + c_idx) % remaining_targets.len()]);
+
+                    let dest_chunks_dir = target_chunks_dirs
+                        .get(&dest_target.target_id)
+                        .ok_or_else(|| "Chunks directory not found".to_string())?;
+
+                    let _ = app.emit(
+                        "migration-progress",
+                        MigrationProgressPayload {
+                            stage: "migrating".into(),
+                            current_chunk: current_chunk_idx,
+                            total_chunks: total_chunks_to_evacuate,
+                            copied_chunks: copied_count,
+                            relayed_chunks: relayed_count,
+                            reconstructed_chunks: reconstructed_count,
+                            current_package_name: pkg.name.clone(),
+                            message: format!("Evacuating shard {}/{} to {}", current_chunk_idx, total_chunks_to_evacuate, dest_target.label),
+                        },
+                    );
+
+                    match transfer_or_reconstruct_shard(
+                        &client,
+                        &stripe_clone.chunks[c_idx],
+                        &stripe_clone,
+                        pkg,
+                        s_idx,
+                        dest_chunks_dir,
+                        &master_key,
+                    )
+                    .await
+                    {
+                        Ok((new_file_id, method)) => {
+                            if method == "copied" {
+                                copied_count += 1;
+                            } else if method == "relayed" {
+                                relayed_count += 1;
+                            } else {
+                                reconstructed_count += 1;
+                            }
+
+                            pkg.stripes[s_idx].chunks[c_idx].target_id = dest_target.target_id.clone();
+                            pkg.stripes[s_idx].chunks[c_idx].file_id = new_file_id;
+                            pkg_modified = true;
+
+                            if delete_old_shards {
+                                let _ = client.delete_file(&old_file_id).await;
+                            }
+                        }
+                        Err(e) => {
+                            failed_count += 1;
+                            eprintln!("Failed evacuating shard {}: {}", old_file_id, e);
+                        }
+                    }
+                }
+            }
+        }
+
+        if pkg_modified {
+            let _ = state.db.update_package_stripes(&pkg.package_id, &pkg.stripes);
+            if let Ok(enc_meta) = pkg.encrypt(&master_key) {
+                for t in &remaining_targets {
+                    if let Some(m_dir) = target_meta_dirs.get(&t.target_id) {
+                        let _ = client
+                            .upload_file(m_dir, &format!("meta_{}.enc", pkg.package_id), &enc_meta)
+                            .await;
+                    }
+                }
+            }
+        }
+    }
+
+    // Save updated vault with evacuated target removed
+    vault.targets = remaining_targets;
+    state.db.save_vault(&vault).map_err(|e| e.to_string())?;
+
+    let _ = app.emit(
+        "migration-progress",
+        MigrationProgressPayload {
+            stage: "completed".into(),
+            current_chunk: current_chunk_idx,
+            total_chunks: total_chunks_to_evacuate,
+            copied_chunks: copied_count,
+            relayed_chunks: relayed_count,
+            reconstructed_chunks: reconstructed_count,
+            current_package_name: "".into(),
+            message: format!(
+                "Evacuation finished: {} shards safely rebalanced across remaining targets",
+                current_chunk_idx
+            ),
+        },
+    );
+
+    Ok(TargetMigrationResult {
+        success: failed_count == 0,
+        total_migrated: current_chunk_idx,
+        copied_count,
+        relayed_count,
+        reconstructed_count,
+        failed_count,
+        message: format!(
+            "Evacuation completed: {} evacuated ({} copied, {} relayed, {} reconstructed), {} failed",
+            current_chunk_idx, copied_count, relayed_count, reconstructed_count, failed_count
+        ),
+    })
 }

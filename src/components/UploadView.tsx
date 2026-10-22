@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   UploadCloud,
   FileText,
@@ -8,7 +8,7 @@ import {
   Check,
   AlertCircle,
 } from 'lucide-react';
-import { VaultRecord, TransferProgressPayload } from '../types';
+import { VaultRecord, TransferProgressPayload, AdaptiveErasureInfo } from '../types';
 import { api } from '../services/api';
 
 interface UploadViewProps {
@@ -37,8 +37,18 @@ export const UploadView: React.FC<UploadViewProps> = ({
   } | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const [erasureInfo, setErasureInfo] = useState<AdaptiveErasureInfo | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (activeVault) {
+      api
+        .getAdaptiveErasureInfo(activeVault.targets.length)
+        .then((info) => setErasureInfo(info))
+        .catch((err) => console.error(err));
+    }
+  }, [activeVault]);
 
   const formatSize = (bytes: number) => {
     if (bytes === 0) return '0 B';
@@ -156,12 +166,6 @@ export const UploadView: React.FC<UploadViewProps> = ({
   }
 
   const targetCount = activeVault.targets.length;
-  const redundancyScheme =
-    targetCount >= 3
-      ? '2 Data + 1 Parity (Reed-Solomon RS 2+1)'
-      : targetCount === 2
-      ? '1 Data + 1 Parity (RS 1+1 Mirroring)'
-      : 'Single Target (No Parity)';
 
   return (
     <div className="flex-1 bg-slate-900 overflow-y-auto p-8">
@@ -268,16 +272,28 @@ export const UploadView: React.FC<UploadViewProps> = ({
                 </div>
 
                 {/* Redundancy Info */}
-                <div className="grid grid-cols-2 gap-3 pt-2 border-t border-slate-800/60 text-xs">
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 pt-2 border-t border-slate-800/60 text-xs">
                   <div className="bg-slate-900/60 p-3 rounded-lg border border-slate-800/60">
                     <span className="text-slate-500 block mb-1">Storage Targets</span>
                     <span className="font-semibold text-slate-200">
-                      {targetCount} Google Shared Drives/Folders
+                      {targetCount} {targetCount === 1 ? 'Target' : 'Targets'} Connected
                     </span>
                   </div>
                   <div className="bg-slate-900/60 p-3 rounded-lg border border-slate-800/60">
-                    <span className="text-slate-500 block mb-1">Fault-Tolerance Scheme</span>
-                    <span className="font-semibold text-emerald-400">{redundancyScheme}</span>
+                    <span className="text-slate-500 block mb-1">Adaptive RS Scheme</span>
+                    <span className="font-semibold text-cyan-400">
+                      {erasureInfo
+                        ? `${erasureInfo.data_shards} Data + ${erasureInfo.parity_shards} Parity`
+                        : `${targetCount} Targets`}
+                    </span>
+                  </div>
+                  <div className="bg-slate-900/60 p-3 rounded-lg border border-slate-800/60 col-span-2 sm:col-span-1">
+                    <span className="text-slate-500 block mb-1">Fault Tolerance</span>
+                    <span className="font-semibold text-emerald-400">
+                      {erasureInfo && erasureInfo.fault_tolerance > 0
+                        ? `Survives ${erasureInfo.fault_tolerance} dead ${erasureInfo.fault_tolerance === 1 ? 'drive' : 'drives'}`
+                        : 'No redundancy'}
+                    </span>
                   </div>
                 </div>
 

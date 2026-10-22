@@ -4,7 +4,7 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::str::FromStr;
 
-use crate::catalog::manifest::{ErasureSchema, PackageManifest, PackageType};
+use crate::catalog::manifest::{ErasureSchema, PackageManifest, PackageType, Stripe};
 use crate::vault::model::{VaultRecord, VaultRole, VaultTarget};
 
 #[derive(Debug, thiserror::Error)]
@@ -250,7 +250,7 @@ impl Database {
                 deletion_signature, created_at)
                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)
                ON CONFLICT(id) DO UPDATE SET
-               deleted=?13, deletion_signature=?14"#,
+               stripes_json=?9, tree_json=?8, deleted=?13, deletion_signature=?14"#,
             params![
                 manifest.package_id,
                 vault_id,
@@ -268,6 +268,16 @@ impl Database {
                 manifest.deletion_signature,
                 manifest.created_at
             ],
+        )?;
+        Ok(())
+    }
+
+    pub fn update_package_stripes(&self, package_id: &str, stripes: &[Stripe]) -> Result<(), StorageError> {
+        let conn = self.conn.lock().unwrap();
+        let stripes_json = serde_json::to_string(stripes)?;
+        conn.execute(
+            "UPDATE packages SET stripes_json = ?1 WHERE id = ?2",
+            params![stripes_json, package_id],
         )?;
         Ok(())
     }

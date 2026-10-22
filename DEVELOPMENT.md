@@ -46,7 +46,7 @@ magdrive/
 │   │   │   └── permissions.rs         # Google Drive Permissions API (RBAC)
 │   │   ├── erasure/                   # Redundancy & error recovery
 │   │   │   ├── mod.rs
-│   │   │   └── rs.rs                  # Reed-Solomon RS 2+1 encoder & reconstructor
+│   │   │   └── rs.rs                  # Adaptive Reed-Solomon encoder, reconstructor & schema calculator
 │   │   ├── magnet/                    # Magnet Link protocol
 │   │   │   ├── mod.rs
 │   │   │   └── parser.rs              # Magnet URI generator & parser

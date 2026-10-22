@@ -159,3 +159,49 @@ export interface DownloadResult {
   destination_path: string;
   total_bytes: number;
 }
+
+export interface GoogleUserProfile {
+  displayName: string;
+  emailAddress: string;
+}
+
+export interface AdaptiveErasureInfo {
+  num_targets: number;
+  data_shards: number;
+  parity_shards: number;
+  total_shards: number;
+  fault_tolerance: number;
+  overhead_percent: number;
+}
+
+export interface TargetMigrationStats {
+  target_id: string;
+  total_packages: number;
+  affected_packages: number;
+  chunks_on_target: number;
+  total_vault_chunks: number;
+}
+
+export interface MigrationProgressPayload {
+  stage: string;
+  current_chunk: number;
+  total_chunks: number;
+  copied_chunks: number;
+  relayed_chunks: number;
+  reconstructed_chunks: number;
+  current_package_name: string;
+  message: string;
+}
+
+export interface TargetMigrationResult {
+  success: boolean;
+  total_migrated: number;
+  copied_count: number;
+  relayed_count: number;
+  reconstructed_count: number;
+  failed_count: number;
+  message: string;
+}
+
+
+

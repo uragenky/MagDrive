@@ -15,6 +15,10 @@ import {
   DownloadResult,
   SwarmResolveResult,
   TrackerSettings,
+  GoogleUserProfile,
+  AdaptiveErasureInfo,
+  TargetMigrationStats,
+  TargetMigrationResult,
 } from '../types';
 
 // Fast native FileReader blob-to-base64 conversion (avoids large JS string allocations)
@@ -38,6 +42,7 @@ export const api = {
     invoke<void>('save_gcp_settings', { credentials }),
   startGoogleLogin: () => invoke<string>('start_google_login'),
   checkLoginStatus: () => invoke<boolean>('check_login_status'),
+  getGoogleUserProfile: () => invoke<GoogleUserProfile | null>('get_google_user_profile'),
   logoutGoogle: () => invoke<void>('logout_google'),
 
   // Vault
@@ -80,6 +85,36 @@ export const api = {
   getTrackerSettings: () => invoke<TrackerSettings>('get_tracker_settings'),
   saveTrackerSettings: (trackers: string[], defaultSeeding: boolean) =>
     invoke<void>('save_tracker_settings', { trackers, defaultSeeding }),
+  getAdaptiveErasureInfo: (targetsCount: number) =>
+    invoke<AdaptiveErasureInfo>('get_adaptive_erasure_info', { targetsCount }),
+  getTargetMigrationStats: (vaultId: string, sourceTargetId: string) =>
+    invoke<TargetMigrationStats>('get_target_migration_stats', { vaultId, sourceTargetId }),
+  migrateTargetToNew: (
+    vaultId: string,
+    sourceTargetId: string,
+    newTarget: VaultTarget,
+    deleteOldShards: boolean,
+    passphrase?: string
+  ) =>
+    invoke<TargetMigrationResult>('migrate_target_to_new', {
+      vaultId,
+      sourceTargetId,
+      newTarget,
+      deleteOldShards,
+      passphrase,
+    }),
+  evacuateTarget: (
+    vaultId: string,
+    sourceTargetId: string,
+    deleteOldShards: boolean,
+    passphrase?: string
+  ) =>
+    invoke<TargetMigrationResult>('evacuate_target', {
+      vaultId,
+      sourceTargetId,
+      deleteOldShards,
+      passphrase,
+    }),
   deletePackage: (packageId: string) => invoke<void>('delete_package', { packageId }),
 
   // Transfers

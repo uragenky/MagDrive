@@ -111,9 +111,51 @@ pub fn reconstruct(
     Ok(reconstructed)
 }
 
+/// Dynamically calculates the optimal (data_shards, parity_shards) based on the number of targets.
+/// Ensures total shards (data + parity) <= num_targets so each target holds at most 1 shard per stripe.
+pub fn calculate_adaptive_erasure_schema(num_targets: usize) -> (usize, usize) {
+    match num_targets {
+        0 | 1 => (1, 0),
+        2 => (1, 1),
+        3 => (2, 1),
+        4 => (3, 1),
+        5 => (3, 2),
+        6 => (4, 2),
+        7 => (5, 2),
+        8 => (6, 2),
+        n => {
+            let total = n.min(256);
+            let parity = 3;
+            let data = total.saturating_sub(parity).max(1);
+            (data, parity)
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_adaptive_erasure_schema() {
+        assert_eq!(calculate_adaptive_erasure_schema(0), (1, 0));
+        assert_eq!(calculate_adaptive_erasure_schema(1), (1, 0));
+        assert_eq!(calculate_adaptive_erasure_schema(2), (1, 1));
+        assert_eq!(calculate_adaptive_erasure_schema(3), (2, 1));
+        assert_eq!(calculate_adaptive_erasure_schema(4), (3, 1));
+        assert_eq!(calculate_adaptive_erasure_schema(5), (3, 2));
+        assert_eq!(calculate_adaptive_erasure_schema(6), (4, 2));
+        assert_eq!(calculate_adaptive_erasure_schema(7), (5, 2));
+        assert_eq!(calculate_adaptive_erasure_schema(8), (6, 2));
+        assert_eq!(calculate_adaptive_erasure_schema(9), (6, 3));
+        assert_eq!(calculate_adaptive_erasure_schema(10), (7, 3));
+
+        // Total shards must equal num_targets for N >= 2
+        for n in 2..=20 {
+            let (d, p) = calculate_adaptive_erasure_schema(n);
+            assert_eq!(d + p, n, "Failed for n = {}", n);
+        }
+    }
 
     #[test]
     fn test_reed_solomon_2_plus_1_recovery() {
