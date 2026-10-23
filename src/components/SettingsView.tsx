@@ -28,6 +28,7 @@ import {
   ChevronDown,
   ChevronUp,
   X,
+  Unlink,
 } from 'lucide-react';
 import { openUrl } from '@tauri-apps/plugin-opener';
 import { listen } from '@tauri-apps/api/event';
@@ -786,7 +787,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                 onClick={fetchGoogleAccounts}
                 disabled={isLoadingAccounts}
                 title="Refresh accounts & storage quotas"
-                className="flex items-center space-x-1.5 px-3 py-2 rounded-xl text-xs font-semibold bg-[#18191d] hover:bg-[#222428] text-zinc-300 hover:text-zinc-100 border border-[#26282e] transition-all disabled:opacity-50"
+                className="h-9 px-3.5 inline-flex items-center justify-center space-x-1.5 rounded-xl text-xs font-semibold bg-[#18191d] hover:bg-[#222428] text-zinc-300 hover:text-zinc-100 border border-[#26282e] transition-all disabled:opacity-50 shrink-0"
               >
                 <RefreshCw className={`w-3.5 h-3.5 ${isLoadingAccounts ? 'animate-spin text-zinc-300' : ''}`} />
                 <span>{isLoadingAccounts ? 'Refreshing...' : 'Refresh'}</span>
@@ -796,15 +797,16 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   type="button"
                   onClick={handleLogout}
                   title="Disconnect all accounts"
-                  className="px-3 py-2 rounded-xl text-xs font-semibold bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/20 transition-all"
+                  className="h-9 px-3.5 inline-flex items-center justify-center space-x-1.5 rounded-xl text-xs font-semibold bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/20 transition-all shrink-0"
                 >
-                  Disconnect All
+                  <Unlink className="w-3.5 h-3.5" />
+                  <span>Disconnect All</span>
                 </button>
               )}
               <button
                 onClick={handleConnectGoogle}
                 disabled={!clientId.trim()}
-                className="flex items-center space-x-1.5 px-3.5 py-2 rounded-xl text-xs font-semibold bg-zinc-100 hover:bg-white active:bg-zinc-200 text-zinc-950 transition-all shadow-sm border border-white/20 disabled:opacity-50"
+                className="h-9 px-3.5 inline-flex items-center justify-center space-x-1.5 rounded-xl text-xs font-semibold bg-zinc-100 hover:bg-white active:bg-zinc-200 text-zinc-950 transition-all shadow-sm border border-white/20 disabled:opacity-50 shrink-0"
               >
                 <Plus className="w-3.5 h-3.5" />
                 <span>Connect Google Account</span>
@@ -857,7 +859,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               <div>
                 <p className="text-xs font-semibold text-zinc-300">No Google Accounts Connected Yet</p>
                 <p className="text-[11px] text-zinc-500 max-w-sm mx-auto mt-0.5">
-                  Authenticate your first Google account using OAuth 2.0 PKCE. MagDrive will automatically create a dedicated <strong>"MagDrive Storage"</strong> folder on each account.
+                  Authenticate your first Google account using OAuth 2.0 PKCE. MagDrive securely pools your storage drives with zero-knowledge encryption.
                 </p>
               </div>
               <button
@@ -979,11 +981,17 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                       <div className="flex items-center space-x-1.5 text-[11px] text-zinc-400">
                         <Folder className="w-3.5 h-3.5 text-zinc-300 shrink-0" />
                         <span>
-                          Dedicated Folder: <strong className="text-zinc-200">MagDrive Storage</strong>
-                          {acc.rootFolderId && (
-                            <span className="text-[10px] font-mono text-zinc-500 ml-1">
-                              ({acc.rootFolderId})
-                            </span>
+                          {isTargetAdded ? (
+                            <>
+                              Vault Folder: <strong className="text-zinc-200">MagDrive - {activeVault?.name}</strong>
+                              {acc.rootFolderId && (
+                                <span className="text-[10px] font-mono text-zinc-500 ml-1">
+                                  ({acc.rootFolderId})
+                                </span>
+                              )}
+                            </>
+                          ) : (
+                            <span className="text-zinc-500">Not attached to active vault</span>
                           )}
                         </span>
                       </div>

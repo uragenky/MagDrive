@@ -7,8 +7,11 @@ import {
   FolderLock,
   FileText,
   UploadCloud,
+  Info,
+  ChevronDown,
+  ChevronUp,
 } from 'lucide-react';
-import { VaultTarget } from '../types';
+import { VaultTarget, GoogleAccountInfo } from '../types';
 import { api } from '../services/api';
 
 export type VaultModalMode = 'create' | 'import';
@@ -17,7 +20,12 @@ interface VaultModalProps {
   isOpen: boolean;
   initialMode?: VaultModalMode;
   onClose: () => void;
-  onCreateVault: (name: string, passphrase: string, targets: VaultTarget[]) => Promise<void>;
+  onCreateVault: (
+    name: string,
+    passphrase: string,
+    targets: VaultTarget[],
+    autoAccountEmails?: string[]
+  ) => Promise<void>;
   onImportVault: (token: string, passphrase: string) => Promise<void>;
 }
 
@@ -34,6 +42,10 @@ export const VaultModal: React.FC<VaultModalProps> = ({
   const [newName, setNewName] = useState('');
   const [newPassphrase, setNewPassphrase] = useState('');
   const [confirmPassphrase, setConfirmPassphrase] = useState('');
+  const [googleAccounts, setGoogleAccounts] = useState<GoogleAccountInfo[]>([]);
+  const [selectedEmails, setSelectedEmails] = useState<string[]>([]);
+  const [isLoadingAccounts, setIsLoadingAccounts] = useState(false);
+  const [showManualTargets, setShowManualTargets] = useState(false);
   const [newTargets, setNewTargets] = useState<VaultTarget[]>([
     { label: 'Primary Drive', target_type: 'SharedFolder', target_id: '' },
   ]);
@@ -48,15 +60,45 @@ export const VaultModal: React.FC<VaultModalProps> = ({
   const [isLoading, setIsLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
+  const formatBytes = (bytes?: number) => {
+    if (!bytes || bytes <= 0) return '0 B';
+    const k = 1024;
+    const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+  };
+
   useEffect(() => {
     if (isOpen) {
       setActiveTab(initialMode);
       setErrorMsg(null);
       setConfirmPassphrase('');
+      setShowManualTargets(false);
+
+      setIsLoadingAccounts(true);
+      api.listGoogleAccounts()
+        .then((accounts) => {
+          setGoogleAccounts(accounts);
+          setSelectedEmails(accounts.map((a) => a.email));
+        })
+        .catch((err) => {
+          console.warn('Failed to load accounts in VaultModal:', err);
+        })
+        .finally(() => {
+          setIsLoadingAccounts(false);
+        });
     }
   }, [isOpen, initialMode]);
 
   if (!isOpen) return null;
+
+  const toggleEmail = (email: string) => {
+    if (selectedEmails.includes(email)) {
+      setSelectedEmails(selectedEmails.filter((e) => e !== email));
+    } else {
+      setSelectedEmails([...selectedEmails, email]);
+    }
+  };
 
   const handleCreateSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -70,16 +112,19 @@ export const VaultModal: React.FC<VaultModalProps> = ({
       return;
     }
 
-    const validTargets = newTargets.filter((t) => t.target_id.trim() !== '');
-    if (validTargets.length === 0) {
-      setErrorMsg('At least one Google Drive Folder ID must be provided.');
-      return;
-    }
+    const manualTargets = showManualTargets
+      ? newTargets.filter((t) => t.target_id.trim() !== '')
+      : [];
 
     try {
       setIsLoading(true);
       setErrorMsg(null);
-      await onCreateVault(newName.trim(), newPassphrase.trim(), validTargets);
+      await onCreateVault(
+        newName.trim(),
+        newPassphrase.trim(),
+        manualTargets,
+        selectedEmails
+      );
       onClose();
     } catch (err: any) {
       setErrorMsg(err?.toString() || 'Failed to create vault.');
@@ -244,71 +289,150 @@ export const VaultModal: React.FC<VaultModalProps> = ({
                 />
               </div>
 
-              <div>
-                <div className="flex items-center justify-between mb-1.5">
-                  <label className="font-semibold text-zinc-400 block">
-                    Google Drive Folder ID:
+              {/* Connected Google Accounts for Auto Storage */}
+              <div className="space-y-2 pt-1">
+                <div className="flex items-center justify-between">
+                  <label className="font-semibold text-zinc-400 block text-xs">
+                    Storage Targets (Auto-Generated Folder)
                   </label>
-                  <button
-                    type="button"
-                    onClick={() =>
-                      setNewTargets([
-                        ...newTargets,
-                        {
-                          label: `Drive ${newTargets.length + 1} (Parity)`,
-                          target_type: 'SharedFolder',
-                          target_id: '',
-                        },
-                      ])
-                    }
-                    className="text-[11px] text-zinc-300 hover:text-white font-semibold"
-                  >
-                    + Add Backup Drive (Optional)
-                  </button>
+                  {googleAccounts.length > 0 && (
+                    <span className="text-[10px] text-zinc-400 font-mono">
+                      {selectedEmails.length} of {googleAccounts.length} selected
+                    </span>
+                  )}
                 </div>
-                <div className="space-y-2">
-                  {newTargets.map((t, idx) => (
-                    <div key={idx} className="flex gap-2">
-                      <input
-                        type="text"
-                        placeholder={`Label ${idx + 1}`}
-                        value={t.label}
-                        onChange={(e) => {
-                          const copy = [...newTargets];
-                          copy[idx].label = e.target.value;
-                          setNewTargets(copy);
-                        }}
-                        className="w-1/3 bg-[#18191d] border border-[#26282e] rounded-lg px-3 py-2 text-zinc-200 focus:outline-none focus:border-zinc-500"
-                      />
-                      <input
-                        type="text"
-                        placeholder="Google Drive Folder ID"
-                        value={t.target_id}
-                        onChange={(e) => {
-                          const copy = [...newTargets];
-                          copy[idx].target_id = e.target.value;
-                          setNewTargets(copy);
-                        }}
-                        className="flex-1 bg-[#18191d] border border-[#26282e] rounded-lg px-3 py-2 text-zinc-200 font-mono focus:outline-none focus:border-zinc-500"
-                      />
-                      {newTargets.length > 1 && (
-                        <button
-                          type="button"
-                          onClick={() => setNewTargets(newTargets.filter((_, i) => i !== idx))}
-                          className="px-2 text-zinc-500 hover:text-rose-400 text-xs"
+
+                {isLoadingAccounts ? (
+                  <div className="p-4 rounded-xl bg-[#18191d] border border-[#26282e] text-center text-zinc-400 text-xs">
+                    Loading connected accounts...
+                  </div>
+                ) : googleAccounts.length > 0 ? (
+                  <div className="space-y-1.5">
+                    {googleAccounts.map((acc) => {
+                      const isChecked = selectedEmails.includes(acc.email);
+                      return (
+                        <label
+                          key={acc.email}
+                          onClick={() => toggleEmail(acc.email)}
+                          className={`flex items-center justify-between p-2.5 rounded-xl border transition-all cursor-pointer ${
+                            isChecked
+                              ? 'bg-[#18191d] border-[#383b42] text-zinc-100 shadow-sm'
+                              : 'bg-[#131417] border-[#222429] text-zinc-400 opacity-60 hover:opacity-90'
+                          }`}
                         >
-                          ✕
-                        </button>
-                      )}
+                          <div className="flex items-center space-x-2.5 overflow-hidden">
+                            <input
+                              type="checkbox"
+                              checked={isChecked}
+                              onChange={() => {}}
+                              className="rounded border-[#26282e] bg-[#0c0d0e] text-zinc-100 focus:ring-0 cursor-pointer"
+                            />
+                            <div className="overflow-hidden">
+                              <div className="text-xs font-semibold text-zinc-200 truncate">
+                                {acc.displayName}
+                              </div>
+                              <div className="text-[10px] text-zinc-400 font-mono truncate">
+                                {acc.email}
+                              </div>
+                            </div>
+                          </div>
+                          <div className="text-[10px] font-mono text-emerald-400 shrink-0 ml-2">
+                            {acc.isUnlimited ? 'Unlimited' : `${formatBytes(acc.freeBytes)} free`}
+                          </div>
+                        </label>
+                      );
+                    })}
+                    <p className="text-[10px] text-zinc-400 leading-relaxed pt-0.5">
+                      MagDrive will automatically create and organize a dedicated folder named <span className="font-mono text-zinc-300">"MagDrive - {newName.trim() || 'Vault'}"</span> in each selected account.
+                    </p>
+                  </div>
+                ) : (
+                  <div className="p-3.5 rounded-xl bg-[#18191d] border border-[#26282e] space-y-1">
+                    <div className="flex items-center space-x-2 text-zinc-300 text-xs font-semibold">
+                      <Info className="w-3.5 h-3.5 text-zinc-400 shrink-0" />
+                      <span>No Google Accounts Connected Yet</span>
                     </div>
-                  ))}
-                </div>
-                <p className="text-[10px] text-zinc-500 mt-1.5">
-                  1 drive is sufficient for basic encrypted storage. Adding 2 or more drives enables automatic parity redundancy and hardware failure protection.
-                </p>
-                <p className="text-[10px] text-zinc-500 mt-0.5">
-                  Tip: Open the folder in Google Drive and copy the code after <span className="font-mono text-zinc-400">/folders/</span> in your browser URL bar.
-                </p>
+                    <p className="text-[11px] text-zinc-400 leading-relaxed">
+                      Your vault identity and encryption keys will be created locally. You can connect Google accounts anytime in <strong>Settings</strong> to attach storage drives.
+                    </p>
+                  </div>
+                )}
+              </div>
+
+              {/* Advanced Manual Target Configuration (Collapsible) */}
+              <div className="pt-1">
+                <button
+                  type="button"
+                  onClick={() => setShowManualTargets(!showManualTargets)}
+                  className="flex items-center space-x-1.5 text-[11px] text-zinc-400 hover:text-zinc-200 font-medium transition-colors"
+                >
+                  {showManualTargets ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+                  <span>Advanced: Custom Folder ID (Optional)</span>
+                </button>
+
+                {showManualTargets && (
+                  <div className="mt-2.5 p-3 rounded-xl bg-[#18191d] border border-[#26282e] space-y-3">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[11px] font-semibold text-zinc-300">
+                        Manual Google Drive Target
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setNewTargets([
+                            ...newTargets,
+                            {
+                              label: `Drive ${newTargets.length + 1}`,
+                              target_type: 'SharedFolder',
+                              target_id: '',
+                            },
+                          ])
+                        }
+                        className="text-[10px] text-zinc-300 hover:text-white font-semibold"
+                      >
+                        + Add Custom Target
+                      </button>
+                    </div>
+
+                    <div className="space-y-2">
+                      {newTargets.map((t, idx) => (
+                        <div key={idx} className="flex gap-2">
+                          <input
+                            type="text"
+                            placeholder={`Label ${idx + 1}`}
+                            value={t.label}
+                            onChange={(e) => {
+                              const copy = [...newTargets];
+                              copy[idx].label = e.target.value;
+                              setNewTargets(copy);
+                            }}
+                            className="w-1/3 bg-[#131417] border border-[#26282e] rounded-lg px-2.5 py-1.5 text-zinc-200 text-xs focus:outline-none focus:border-zinc-500"
+                          />
+                          <input
+                            type="text"
+                            placeholder="Folder ID (from URL bar)"
+                            value={t.target_id}
+                            onChange={(e) => {
+                              const copy = [...newTargets];
+                              copy[idx].target_id = e.target.value;
+                              setNewTargets(copy);
+                            }}
+                            className="flex-1 bg-[#131417] border border-[#26282e] rounded-lg px-2.5 py-1.5 text-zinc-200 font-mono text-xs focus:outline-none focus:border-zinc-500"
+                          />
+                          {newTargets.length > 1 && (
+                            <button
+                              type="button"
+                              onClick={() => setNewTargets(newTargets.filter((_, i) => i !== idx))}
+                              className="px-2 text-zinc-500 hover:text-rose-400 text-xs"
+                            >
+                              ✕
+                            </button>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </div>
 
               <button
