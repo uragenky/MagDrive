@@ -258,6 +258,9 @@ To trigger a release build:
 2. Or trigger manually via the **GitHub Actions** tab in your repository (`Workflow dispatch`).
 3. Completed installers (`.msi`, `.exe`, `.deb`, `.AppImage`, `.dmg`) will automatically be published to the GitHub Releases section of your repository.
 
+> **Note for Windows Users (SmartScreen & "Unknown Publisher"):**  
+> Because MagDrive is an open-source community release without a costly commercial code-signing certificate, Windows Defender SmartScreen may display *"Windows protected your PC"*. Simply click **"More info"** and select **"Run anyway"**. All released binaries can be verified using the published SHA-256 checksums or built directly from source.
+
 ---
 
 ## Google Workspace & GCP Setup

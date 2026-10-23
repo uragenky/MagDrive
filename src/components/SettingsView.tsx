@@ -1015,9 +1015,9 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                         {/* Toggle Shared Drives */}
                         <button
                           onClick={() => handleToggleSharedDrives(acc.email)}
-                          className="flex items-center space-x-1 px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 transition-all"
+                          className="flex items-center space-x-1 px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-[#18191d] hover:bg-[#222428] text-zinc-300 border border-[#26282e] transition-all"
                         >
-                          <HardDrive className="w-3.5 h-3.5 text-indigo-400" />
+                          <HardDrive className="w-3.5 h-3.5 text-zinc-400" />
                           <span>Shared Drives</span>
                           {isDrivesOpen ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
                         </button>
@@ -1026,13 +1026,13 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
 
                     {/* Shared Drives Drawer */}
                     {isDrivesOpen && (
-                      <div className="mt-2 p-3 rounded-lg bg-slate-950 border border-indigo-950/60 space-y-2">
+                      <div className="mt-2 p-3 rounded-lg bg-[#18191d] border border-[#26282e] space-y-2">
                         <div className="flex items-center justify-between">
-                          <span className="text-[11px] font-bold text-slate-300">
+                          <span className="text-[11px] font-bold text-zinc-300">
                             Accessible Google Workspace Shared Drives
                           </span>
                           {isLoadingDrives && (
-                            <span className="text-[10px] text-slate-500 flex items-center space-x-1">
+                            <span className="text-[10px] text-zinc-500 flex items-center space-x-1">
                               <Loader2 className="w-3 h-3 animate-spin" />
                               <span>Scanning drives...</span>
                             </span>
@@ -1040,7 +1040,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                         </div>
 
                         {drives.length === 0 && !isLoadingDrives ? (
-                          <p className="text-[11px] text-slate-500 py-1">
+                          <p className="text-[11px] text-zinc-500 py-1">
                             No Google Workspace Shared Drives found for this account.
                           </p>
                         ) : (
@@ -1053,7 +1053,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                                   [acc.email]: e.target.value,
                                 }))
                               }
-                              className="flex-1 bg-slate-900 border border-slate-800 rounded-lg px-3 py-1.5 text-xs text-slate-200 focus:outline-none focus:border-indigo-500"
+                              className="flex-1 bg-[#131417] border border-[#222429] rounded-lg px-3 py-1.5 text-xs text-zinc-200 focus:outline-none focus:border-zinc-500"
                             >
                               {drives.map((d) => (
                                 <option key={d.id} value={d.id}>
@@ -1064,7 +1064,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                             <button
                               onClick={() => handleAddSharedDriveTarget(acc.email)}
                               disabled={!activeVault || drives.length === 0}
-                              className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-indigo-600 hover:bg-indigo-500 text-white transition-all disabled:opacity-50"
+                              className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-zinc-100 hover:bg-white active:bg-zinc-200 text-zinc-950 shadow-sm border border-white/20 transition-all disabled:opacity-50"
                             >
                               Add Drive to Vault
                             </button>
@@ -1082,13 +1082,13 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
 
         {/* Tab 2: Transfers & Download Preferences */}
         {activeSettingsTab === 'transfers' && (
-        <div className="bg-slate-950 border border-slate-800 rounded-2xl p-6 space-y-5">
-          <div className="flex items-center justify-between border-b border-slate-800/80 pb-3">
+        <div className="bg-[#131417] border border-[#222429] rounded-2xl p-6 space-y-5">
+          <div className="flex items-center justify-between border-b border-[#222429] pb-3">
             <div className="flex items-center space-x-2">
-              <FolderDown className="w-5 h-5 text-emerald-400" />
+              <FolderDown className="w-5 h-5 text-zinc-300" />
               <div>
-                <h3 className="text-sm font-bold text-slate-100">Download Preferences</h3>
-                <p className="text-[11px] text-slate-500">Configure default save location and download prompt behaviors.</p>
+                <h3 className="text-sm font-bold text-zinc-100">Download Preferences</h3>
+                <p className="text-[11px] text-zinc-400">Configure default save location and download prompt behaviors.</p>
               </div>
             </div>
             {downloadSettingsSaved && (
@@ -1102,42 +1102,42 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
           <div className="space-y-4">
             {/* Default Download Directory */}
             <div>
-              <label className="text-xs font-semibold text-slate-400 block mb-1.5">
+              <label className="text-xs font-semibold text-zinc-400 block mb-1.5">
                 Default Download Directory
               </label>
               <div className="flex items-center space-x-2">
-                <div className="flex-1 bg-slate-900 border border-slate-800 rounded-xl px-3.5 py-2.5 text-xs text-slate-200 font-mono truncate select-all">
+                <div className="flex-1 bg-[#18191d] border border-[#26282e] rounded-xl px-3.5 py-2.5 text-xs text-zinc-200 font-mono truncate select-all">
                   {downloadDir || 'Detecting default system download folder...'}
                 </div>
                 <button
                   type="button"
                   onClick={handleBrowseDownloadDir}
-                  className="flex items-center space-x-1.5 px-3.5 py-2.5 rounded-xl text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-emerald-400 border border-slate-700 transition-all shrink-0"
+                  className="flex items-center space-x-1.5 px-3.5 py-2.5 rounded-xl text-xs font-semibold bg-[#18191d] hover:bg-[#222428] text-zinc-200 border border-[#26282e] transition-all shrink-0"
                 >
-                  <FolderOpen className="w-3.5 h-3.5" />
+                  <FolderOpen className="w-3.5 h-3.5 text-zinc-400" />
                   <span>Change...</span>
                 </button>
                 <button
                   type="button"
                   onClick={handleResetDownloadDir}
                   title="Reset to system default Downloads folder"
-                  className="p-2.5 rounded-xl text-xs font-semibold bg-slate-900 hover:bg-slate-800 text-slate-400 hover:text-slate-200 border border-slate-800 transition-all shrink-0"
+                  className="p-2.5 rounded-xl text-xs font-semibold bg-[#18191d] hover:bg-[#222428] text-zinc-400 hover:text-zinc-200 border border-[#26282e] transition-all shrink-0"
                 >
                   <RotateCcw className="w-3.5 h-3.5" />
                 </button>
               </div>
-              <p className="text-[11px] text-slate-500 mt-1">
+              <p className="text-[11px] text-zinc-500 mt-1">
                 Standard folder where decrypted files will be assembled and stored.
               </p>
             </div>
 
             {/* Prompt Save Location Toggle */}
-            <div className="pt-3 border-t border-slate-800/60 flex items-start justify-between">
+            <div className="pt-3 border-t border-[#222429] flex items-start justify-between">
               <div className="space-y-0.5">
-                <label htmlFor="promptSaveCheckbox" className="text-xs font-semibold text-slate-200 cursor-pointer">
+                <label htmlFor="promptSaveCheckbox" className="text-xs font-semibold text-zinc-200 cursor-pointer">
                   Always ask where to save each file
                 </label>
-                <p className="text-[11px] text-slate-500">
+                <p className="text-[11px] text-zinc-500">
                   When enabled, a native "Save As" file dialog appears every time you download a file, letting you choose its destination folder and name.
                 </p>
               </div>
@@ -1149,7 +1149,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   onChange={(e) => handleTogglePromptSave(e.target.checked)}
                   className="sr-only peer"
                 />
-                <div className="w-9 h-5 bg-slate-800 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-emerald-600"></div>
+                <div className="w-9 h-5 bg-[#26282e] peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-zinc-100"></div>
               </label>
             </div>
           </div>
@@ -1158,13 +1158,13 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
 
         {/* Tab 4: API & Swarm Network (Part 2: Multi-Tracker) */}
         {activeSettingsTab === 'advanced' && (
-        <div className="bg-slate-950 border border-slate-800 rounded-2xl p-6 space-y-5">
-          <div className="flex items-center justify-between border-b border-slate-800/80 pb-3">
+        <div className="bg-[#131417] border border-[#222429] rounded-2xl p-6 space-y-5">
+          <div className="flex items-center justify-between border-b border-[#222429] pb-3">
             <div className="flex items-center space-x-2">
-              <Server className="w-5 h-5 text-indigo-400" />
+              <Server className="w-5 h-5 text-zinc-300" />
               <div>
-                <h3 className="text-sm font-bold text-slate-100">P2P Swarm & Trackers</h3>
-                <p className="text-[11px] text-slate-500">
+                <h3 className="text-sm font-bold text-zinc-100">P2P Swarm & Trackers</h3>
+                <p className="text-[11px] text-zinc-400">
                   List of trackers for peer discovery and mirror swarm coordination.
                 </p>
               </div>
@@ -1178,20 +1178,20 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
           </div>
 
           <div className="space-y-3">
-            <label className="text-xs font-semibold text-slate-300 block">
+            <label className="text-xs font-semibold text-zinc-300 block">
               Active Trackers:
             </label>
             <div className="space-y-2">
               {trackers.map((tr, idx) => (
                 <div
                   key={idx}
-                  className="flex items-center justify-between bg-slate-900 border border-slate-800 rounded-lg p-2.5 text-xs"
+                  className="flex items-center justify-between bg-[#18191d] border border-[#26282e] rounded-xl p-2.5 text-xs"
                 >
-                  <span className="font-mono text-slate-300 truncate max-w-[85%]">{tr}</span>
+                  <span className="font-mono text-zinc-300 truncate max-w-[85%]">{tr}</span>
                   <button
                     onClick={() => handleRemoveTracker(idx)}
                     disabled={trackers.length <= 1}
-                    className="p-1 rounded text-slate-500 hover:text-rose-400 transition-colors disabled:opacity-30"
+                    className="p-1 rounded text-zinc-500 hover:text-rose-400 transition-colors disabled:opacity-30"
                     title={trackers.length <= 1 ? 'At least 1 tracker is required' : 'Remove tracker'}
                   >
                     <Trash2 className="w-3.5 h-3.5" />

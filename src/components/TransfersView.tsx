@@ -129,7 +129,7 @@ export const TransfersView: React.FC<TransfersViewProps> = ({
         );
       case 'cancelled':
         return (
-          <span className="inline-flex items-center space-x-1 px-2.5 py-0.5 rounded-full text-[10px] font-semibold bg-slate-800 text-slate-400 border border-slate-700">
+          <span className="inline-flex items-center space-x-1 px-2.5 py-0.5 rounded-full text-[10px] font-semibold bg-zinc-800 text-zinc-400 border border-zinc-700">
             <XCircle className="w-3 h-3" />
             <span>Cancelled</span>
           </span>
@@ -143,7 +143,7 @@ export const TransfersView: React.FC<TransfersViewProps> = ({
         );
       default:
         return (
-          <span className="inline-flex items-center space-x-1 px-2.5 py-0.5 rounded-full text-[10px] font-semibold bg-slate-800 text-slate-400 border border-slate-700">
+          <span className="inline-flex items-center space-x-1 px-2.5 py-0.5 rounded-full text-[10px] font-semibold bg-zinc-800 text-zinc-400 border border-zinc-700">
             <Clock className="w-3 h-3" />
             <span>Pending</span>
           </span>
