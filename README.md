@@ -325,6 +325,21 @@ For technical architecture details, IPC command specifications, schema structure
 
 ---
 
+## Legal & Compliance Disclaimer
+
+### Third-Party Terms & Non-Affiliation
+- **Not Affiliated with Google LLC**: MagDrive is an independent open-source software project and is not affiliated, associated, authorized, endorsed by, or in any way officially connected with Google LLC, Google Drive™, Google Workspace™, or any of their subsidiaries or affiliates. The official Google website can be found at [https://google.com](https://google.com).
+- **Trademark Notice**: Google Drive™, Google Workspace™, and Google™ are registered trademarks of Google LLC. References to these names and trademarks are made strictly for identification and technical interoperability purposes under fair use doctrine.
+- **Compliance with Third-Party Terms**: Users are solely responsible for ensuring that their configuration and usage of MagDrive comply with the [Google Terms of Service](https://policies.google.com/terms), [Google Drive Additional Terms](https://www.google.com/drive/terms-of-service/), and Google Cloud Platform policies. MagDrive operates as a client-side encryption and personal data redundancy utility utilizing user-provided API credentials (BYOK model); it does not bypass Google authentication mechanisms or encourage the violation of cloud storage quotas.
+
+### Acceptable Use & Anti-Piracy Policy
+MagDrive provides client-side cryptographic primitives (AES-256-GCM, Argon2id, Ed25519, Reed-Solomon Erasure Coding) intended for personal backup, disaster recovery, and sovereign data preservation. MagDrive does not host, index, track, promote, or distribute any user content. Users are strictly prohibited from utilizing MagDrive to transmit, distribute, or store material that infringes on third-party copyrights or intellectual property rights, violates local or international laws, or contains malicious payloads.
+
+### Limitation of Liability
+THIS SOFTWARE IS PROVIDED "AS IS" AND "AS AVAILABLE", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, TITLE, AND NON-INFRINGEMENT. IN NO EVENT SHALL THE AUTHORS, COPYRIGHT HOLDERS, OR CONTRIBUTORS BE LIABLE FOR ANY CLAIM, DAMAGES, LOSS OF DATA, SERVICE SUSPENSION, ACCOUNT PENALTY, OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT, OR OTHERWISE, ARISING FROM, OUT OF, OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+---
+
 ## License
 
 This project is licensed under the GNU General Public License v3.0 (GPLv3) - see the [LICENSE](./LICENSE) file for details.
