@@ -6,7 +6,6 @@ import {
   Activity,
   Settings,
   ChevronDown,
-  Layers,
   PlusCircle,
   DownloadCloud,
   Trash2,
@@ -75,8 +74,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
       <div>
         {/* Brand */}
         <div className="h-16 border-b border-[#202226] px-6 flex items-center space-x-3">
-          <div className="w-9 h-9 rounded-xl bg-gradient-to-b from-zinc-100 to-zinc-300 text-zinc-950 flex items-center justify-center shadow-sm border border-white/20">
-            <Layers className="w-5 h-5 text-zinc-900" />
+          <div className="w-9 h-9 rounded-xl overflow-hidden flex items-center justify-center shadow-sm border border-[#272a32] bg-[#141518] shrink-0">
+            <img src="/icon.svg" alt="MagDrive Logo" className="w-full h-full object-cover" />
           </div>
           <div>
             <h1 className="text-base font-bold tracking-tight text-zinc-100 flex items-center space-x-1.5">

@@ -1,0 +1,77 @@
+<svg viewBox="0 0 512 512" width="512" height="512" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <!-- Background Gradient -->
+    <linearGradient id="c-bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#181a20"/>
+      <stop offset="100%" stop-color="#0b0c0e"/>
+    </linearGradient>
+
+    <!-- Data Shard 1 Gradient -->
+    <linearGradient id="c-data1" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#ffffff"/>
+      <stop offset="100%" stop-color="#cbd5e1"/>
+    </linearGradient>
+
+    <!-- Data Shard 2 Gradient -->
+    <linearGradient id="c-data2" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#f1f5f9"/>
+      <stop offset="100%" stop-color="#94a3b8"/>
+    </linearGradient>
+
+    <!-- Parity Shard 1 (Emerald) Gradient -->
+    <linearGradient id="c-emerald" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#34d399"/>
+      <stop offset="100%" stop-color="#059669"/>
+    </linearGradient>
+
+    <!-- Parity Shard 2 (Amber) Gradient -->
+    <linearGradient id="c-amber" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#fbbf24"/>
+      <stop offset="100%" stop-color="#d97706"/>
+    </linearGradient>
+
+    <!-- Center Radial Glow -->
+    <radialGradient id="c-glow" cx="50%" cy="50%" r="48%">
+      <stop offset="0%" stop-color="#10b981" stop-opacity="0.32"/>
+      <stop offset="55%" stop-color="#10b981" stop-opacity="0.08"/>
+      <stop offset="100%" stop-color="#10b981" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <!-- Base Canvas Squircle -->
+  <rect x="20" y="20" width="472" height="472" rx="112" fill="url(#c-bg)" stroke="#272a32" stroke-width="3"/>
+
+  <!-- Center Emerald Ambient Aura -->
+  <circle cx="256" cy="256" r="160" fill="url(#c-glow)"/>
+
+  <!-- Center Origin Transform for 6-Fold Crystals -->
+  <g transform="translate(256, 256)">
+    <!-- Shard 1 (Top: 0 deg - Data Shard 1) -->
+    <path d="M 12.8 -91.1 L 10.11 -144.65 L 71.59 -160.78 L 130.81 -102.2 L 63.91 -66.18 Z" fill="url(#c-data1)"/>
+
+    <!-- Shard 2 (Top-Right: 60 deg - Data Shard 2) -->
+    <path d="M 85.29 -34.46 L 130.33 -63.57 L 175.03 -18.39 L 153.91 62.18 L 89.27 22.26 Z" fill="url(#c-data2)"/>
+
+    <!-- Shard 3 (Bottom-Right: 120 deg - Parity Shard 1 Emerald) -->
+    <path d="M 72.49 56.64 L 120.22 81.08 L 103.44 142.39 L 23.1 164.38 L 25.36 88.44 Z" fill="url(#c-emerald)"/>
+
+    <!-- Shard 4 (Bottom: 180 deg - Parity Shard 2 Amber) -->
+    <path d="M -12.8 91.1 L -10.11 144.65 L -71.59 160.78 L -130.81 102.2 L -63.91 66.18 Z" fill="url(#c-amber)"/>
+
+    <!-- Shard 5 (Bottom-Left: 240 deg - Data Shard 3) -->
+    <path d="M -85.29 34.46 L -130.33 63.57 L -175.03 18.39 L -153.91 -62.18 L -89.27 -22.26 Z" fill="url(#c-data2)"/>
+
+    <!-- Shard 6 (Top-Left: 300 deg - Data Shard 4) -->
+    <path d="M -72.49 -56.64 L -120.22 -81.08 L -103.44 -142.39 L -23.1 -164.38 L -25.36 -88.44 Z" fill="url(#c-data1)"/>
+
+    <!-- Vault Core Chamber -->
+    <circle cx="0" cy="0" r="54" fill="#0d0e11" stroke="#222429" stroke-width="3"/>
+    <circle cx="0" cy="0" r="42" fill="#14161a"/>
+    <circle cx="0" cy="0" r="28" fill="#10b981" opacity="0.16"/>
+
+    <!-- Precision Zero-Knowledge Vault Shield -->
+    <path d="M 0 -22 L 18 -11 L 18 8 C 18 20 0 28 0 28 C 0 28 -18 20 -18 8 L -18 -11 Z" 
+          fill="none" stroke="#10b981" stroke-width="3.5" stroke-linejoin="round"/>
+    <circle cx="0" cy="3" r="3.5" fill="#34d399"/>
+  </g>
+</svg>
