@@ -252,8 +252,8 @@ A preconfigured GitHub Actions workflow (`.github/workflows/release.yml`) automa
 To trigger a release build:
 1. Push a version tag:
    ```bash
-   git tag v0.5.0
-   git push origin v0.5.0
+   git tag v0.5.1
+   git push origin v0.5.1
    ```
 2. Or trigger manually via the **GitHub Actions** tab in your repository (`Workflow dispatch`).
 3. Completed installers (`.msi`, `.exe`, `.deb`, `.AppImage`, `.dmg`) will automatically be published to the GitHub Releases section of your repository.
