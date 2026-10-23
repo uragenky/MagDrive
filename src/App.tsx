@@ -280,11 +280,26 @@ export function App() {
     addToast('info', 'Finished transfers cleared from queue.', 'Queue Updated');
   };
 
-  const handleCreateVault = async (name: string, passphrase: string, targets: VaultTarget[]) => {
+  const handleCreateVault = async (
+    name: string,
+    passphrase: string,
+    targets: VaultTarget[],
+    autoAccountEmails?: string[]
+  ) => {
     const record = await api.createVault(name, passphrase, targets);
+    if (autoAccountEmails && autoAccountEmails.length > 0) {
+      for (const email of autoAccountEmails) {
+        try {
+          await api.autoAddAccountTarget(record.id, email);
+        } catch (e) {
+          console.error(`Failed to auto-add target for ${email}:`, e);
+        }
+      }
+    }
     const vList = await api.listVaults();
     setVaults(vList);
-    setActiveVault(record);
+    const updated = vList.find((v) => v.id === record.id) || record;
+    setActiveVault(updated);
     await refreshFiles();
     addToast('success', `Vault "${name}" created successfully!`, 'Vault Created');
   };

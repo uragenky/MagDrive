@@ -392,14 +392,13 @@ pub async fn start_google_login(
             let temp_client = DriveClient::new(tokens.access_token.clone());
 
             if let Ok(profile) = temp_client.get_user_profile().await {
-                let root_folder_id = temp_client.find_or_create_magdrive_folder().await.ok();
                 let account = GoogleAccountRecord {
                     email: profile.email_address.clone(),
                     display_name: profile.display_name.clone(),
                     access_token: tokens.access_token.clone(),
                     refresh_token: tokens.refresh_token.clone().unwrap_or_default(),
                     expires_at,
-                    root_folder_id,
+                    root_folder_id: None,
                     created_at: chrono::Utc::now().timestamp(),
                 };
                 let _ = db_clone.save_google_account(&account);
@@ -572,18 +571,10 @@ pub async fn list_google_accounts(state: State<'_, AppState>) -> Result<Vec<Goog
 
     for acc in accounts {
         let client_res = get_drive_client_for_account(&state.db, &acc.email).await;
-        let mut root_folder_id = acc.root_folder_id.clone();
+        let root_folder_id = acc.root_folder_id.clone();
 
         let (limit_bytes, usage_bytes, usage_in_drive_bytes, usage_in_trash_bytes, free_bytes, usage_percentage, is_unlimited) = match client_res {
             Ok(client) => {
-                // Auto ensure root_folder_id if missing
-                if root_folder_id.is_none() {
-                    if let Ok(fid) = client.find_or_create_magdrive_folder().await {
-                        let _ = state.db.update_account_root_folder(&acc.email, &fid);
-                        root_folder_id = Some(fid);
-                    }
-                }
-
                 match client.get_storage_quota().await {
                     Ok((_, quota_opt)) => {
                         match quota_opt {
