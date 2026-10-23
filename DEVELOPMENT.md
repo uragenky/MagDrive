@@ -11,10 +11,13 @@ magdrive/
 ├── src/                               # Frontend (React 18 + TS + Tailwind)
 │   ├── assets/                        # Static icons and logos
 │   ├── components/                    # UI Component tree
+│   │   ├── ui/                        # Reusable modular UI primitives
+│   │   │   ├── ConfirmModal.tsx       # Global promise-ready confirmation dialog
+│   │   │   └── Toast.tsx              # Stackable toast notification system
+│   │   ├── DownloadModal.tsx          # Direct-to-disk streaming download modal
 │   │   ├── ExplorerView.tsx           # Data Bank file listing, filtering, search
 │   │   ├── HealthView.tsx             # Redundancy monitor & Self-healing rebuild
 │   │   ├── MagnetModal.tsx            # Magnet URI input and metadata preview
-│   │   ├── MembersView.tsx            # Google Permissions management & Token export
 │   │   ├── Navbar.tsx                 # Top bar with active vault indicator & sync
 │   │   ├── SettingsView.tsx           # GCP credentials & Drive target config
 │   │   ├── Sidebar.tsx                # App navigation & vault switcher
@@ -25,7 +28,7 @@ magdrive/
 │   │   └── api.ts                     # Typed Tauri IPC bridge
 │   ├── types/
 │   │   └── index.ts                   # TypeScript interfaces matching Rust models
-│   ├── App.css                        # Tailwind directives and styling
+│   ├── App.css                        # Tailwind directives, tactile grain & theme variables
 │   ├── App.tsx                        # Main application container & state root
 │   └── main.tsx                       # React DOM entrypoint
 ├── src-tauri/                         # Backend (Rust Tauri Core)
@@ -274,7 +277,27 @@ magdrive/
 
 ---
 
-## 5. Adding New Features
+## 5. UI Architecture & Nordic Minimalist Design System
+
+MagDrive utilizes a bespoke **Nordic Minimalist / Tactile Sand** aesthetic designed for focused, low-fatigue engineering workflows:
+
+### 5.1 Color Tokens & Hierarchy
+- **Canvas Base**: `#0c0d0e` (Obsidian Charcoal, eliminating blue-tinted AI boilerplate).
+- **Surface Elevation**: `#131417` (cards & containers), `#18191d` (nested content & inputs).
+- **Borders & Dividers**: `1px solid #222429` (outer bounds) and `#26282e` (inner inputs).
+- **Primary Actions**: Crisp Off-White `bg-zinc-100 hover:bg-white text-zinc-950 font-semibold rounded-xl border border-white/20 shadow-sm`.
+- **Secondary Actions**: Graphite `bg-[#18191d] hover:bg-[#222428] text-zinc-200 rounded-xl border border-[#26282e]`.
+- **Status Accents**: Muted emerald (`emerald-400`/`10% bg`) for healthy/success, muted amber (`amber-400`/`10% bg`) for warning/in-progress, and muted rose (`rose-400`/`10% bg`) for error/danger states.
+
+### 5.2 Procedural Tactile Grain Layer (`.tactile-grain`)
+- Implemented as an inline SVG fractal noise tile (~600 B) defined directly in `src/App.css`.
+- Layered via `<div className="tactile-grain" aria-hidden="true" />` at `position: fixed; inset: 0; pointer-events: none; z-index: 9999; opacity: 0.038`.
+- Rendered on a dedicated GPU compositing layer without invoking CPU paints or webview re-rendering on scroll/resize.
+- Works 100% offline without remote asset fetches or image file dependencies.
+
+---
+
+## 6. Adding New Features
 
 1. **Adding a new Tauri Command**:
    - Define the async function in `src-tauri/src/commands.rs` with `#[tauri::command]`.

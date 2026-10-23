@@ -11,6 +11,8 @@ import {
   XCircle,
   Trash2,
   FolderOpen,
+  Zap,
+  Activity,
 } from 'lucide-react';
 import { listen } from '@tauri-apps/api/event';
 import { revealItemInDir } from '@tauri-apps/plugin-opener';
@@ -18,12 +20,14 @@ import { TransferRecord, TransferProgressPayload } from '../types';
 
 interface TransfersViewProps {
   transfers: TransferRecord[];
-  onPause?: (transferId: string) => Promise<void>;
-  onResume?: (transferId: string) => Promise<void>;
-  onCancel?: (transferId: string) => Promise<void>;
-  onDelete?: (transferId: string) => Promise<void>;
-  onClearFinished?: () => Promise<void>;
+  onPause?: (transferId: string) => Promise<void> | void;
+  onResume?: (transferId: string) => Promise<void> | void;
+  onCancel?: (transferId: string) => Promise<void> | void;
+  onDelete?: (transferId: string) => Promise<void> | void;
+  onClearFinished?: () => Promise<void> | void;
 }
+
+type FilterStatus = 'all' | 'active' | 'completed' | 'other';
 
 export const TransfersView: React.FC<TransfersViewProps> = ({
   transfers,
@@ -33,6 +37,7 @@ export const TransfersView: React.FC<TransfersViewProps> = ({
   onDelete,
   onClearFinished,
 }) => {
+  const [filterStatus, setFilterStatus] = useState<FilterStatus>('all');
   const [liveStats, setLiveStats] = useState<
     Record<
       string,
@@ -103,42 +108,42 @@ export const TransfersView: React.FC<TransfersViewProps> = ({
     switch (status.toLowerCase()) {
       case 'completed':
         return (
-          <span className="inline-flex items-center space-x-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+          <span className="inline-flex items-center space-x-1 px-2.5 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
             <CheckCircle2 className="w-3 h-3" />
             <span>Completed</span>
           </span>
         );
       case 'transferring':
         return (
-          <span className="inline-flex items-center space-x-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-cyan-500/10 text-cyan-400 border border-cyan-500/20 animate-pulse">
+          <span className="inline-flex items-center space-x-1 px-2.5 py-0.5 rounded-full text-[10px] font-semibold bg-cyan-500/10 text-cyan-400 border border-cyan-500/20 animate-pulse">
             <ArrowUpDown className="w-3 h-3" />
             <span>Transferring</span>
           </span>
         );
       case 'paused':
         return (
-          <span className="inline-flex items-center space-x-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-amber-500/10 text-amber-400 border border-amber-500/20">
+          <span className="inline-flex items-center space-x-1 px-2.5 py-0.5 rounded-full text-[10px] font-semibold bg-amber-500/10 text-amber-400 border border-amber-500/20">
             <Pause className="w-3 h-3" />
             <span>Paused</span>
           </span>
         );
       case 'cancelled':
         return (
-          <span className="inline-flex items-center space-x-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-slate-800 text-slate-400 border border-slate-700">
+          <span className="inline-flex items-center space-x-1 px-2.5 py-0.5 rounded-full text-[10px] font-semibold bg-slate-800 text-slate-400 border border-slate-700">
             <XCircle className="w-3 h-3" />
             <span>Cancelled</span>
           </span>
         );
       case 'failed':
         return (
-          <span className="inline-flex items-center space-x-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-rose-500/10 text-rose-400 border border-rose-500/20">
+          <span className="inline-flex items-center space-x-1 px-2.5 py-0.5 rounded-full text-[10px] font-semibold bg-rose-500/10 text-rose-400 border border-rose-500/20">
             <AlertTriangle className="w-3 h-3" />
             <span>Failed</span>
           </span>
         );
       default:
         return (
-          <span className="inline-flex items-center space-x-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-slate-800 text-slate-400 border border-slate-700">
+          <span className="inline-flex items-center space-x-1 px-2.5 py-0.5 rounded-full text-[10px] font-semibold bg-slate-800 text-slate-400 border border-slate-700">
             <Clock className="w-3 h-3" />
             <span>Pending</span>
           </span>
@@ -146,46 +151,169 @@ export const TransfersView: React.FC<TransfersViewProps> = ({
     }
   };
 
+  // Aggregates
+  const activeTransfers = transfers.filter((t) => t.status.toLowerCase() === 'transferring');
+  const completedTransfers = transfers.filter((t) => t.status.toLowerCase() === 'completed');
+  const otherTransfers = transfers.filter((t) =>
+    ['paused', 'failed', 'cancelled', 'pending'].includes(t.status.toLowerCase())
+  );
+
+  let totalUploadBps = 0;
+  let totalDownloadBps = 0;
+  activeTransfers.forEach((tx) => {
+    const s = liveStats[tx.id];
+    if (s && s.speed_bps > 0) {
+      if (tx.transfer_type === 'upload') {
+        totalUploadBps += s.speed_bps;
+      } else {
+        totalDownloadBps += s.speed_bps;
+      }
+    }
+  });
+
+  const filteredTransfers = transfers.filter((t) => {
+    const s = t.status.toLowerCase();
+    if (filterStatus === 'active') return s === 'transferring';
+    if (filterStatus === 'completed') return s === 'completed';
+    if (filterStatus === 'other') return ['paused', 'failed', 'cancelled', 'pending'].includes(s);
+    return true;
+  });
+
   const hasFinished = transfers.some((t) =>
     ['completed', 'cancelled', 'failed'].includes(t.status.toLowerCase())
   );
 
   return (
-    <div className="flex-1 bg-slate-900 overflow-y-auto p-8">
+    <div className="flex-1 bg-[#0c0d0e] overflow-y-auto p-8">
       <div className="max-w-4xl mx-auto space-y-6">
-        <div className="flex items-center justify-between">
+        {/* Header Strip */}
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
           <div>
-            <h2 className="text-xl font-bold text-slate-100">Transfer Queue & History</h2>
-            <p className="text-xs text-slate-400 mt-1">
-              Real-time chunk transfers, pause/resume state machine, and parity reconstruction.
+            <h2 className="text-xl font-bold text-zinc-100 tracking-tight">Transfers</h2>
+            <p className="text-xs text-zinc-400 mt-1">
+              Monitor active uploads, downloads, and transfer history.
             </p>
           </div>
 
           {hasFinished && onClearFinished && (
             <button
               onClick={onClearFinished}
-              className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 transition-all shadow-sm"
+              className="self-start sm:self-auto px-3.5 py-1.5 rounded-xl text-xs font-semibold bg-[#18191d] hover:bg-[#222428] active:bg-[#151618] text-zinc-200 border border-[#26282e] transition-all shadow-sm"
             >
               Clear Finished
             </button>
           )}
         </div>
 
-        {transfers.length === 0 ? (
-          <div className="bg-slate-950 border border-slate-800 rounded-2xl p-12 text-center">
-            <div className="w-12 h-12 rounded-xl bg-slate-900 border border-slate-800 flex items-center justify-center text-slate-500 mx-auto mb-3">
+        {/* Live Bandwidth & Workers Widget */}
+        {activeTransfers.length > 0 && (
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <div className="bg-[#131417] border border-[#222429] rounded-xl p-3.5 flex items-center space-x-3 shadow-sm">
+              <div className="w-9 h-9 rounded-lg bg-zinc-800 text-zinc-200 border border-zinc-700/60 flex items-center justify-center shrink-0">
+                <UploadCloud className="w-4 h-4" />
+              </div>
+              <div>
+                <span className="text-[10px] text-zinc-500 uppercase tracking-wider font-semibold block">
+                  Active Upload
+                </span>
+                <span className="text-sm font-bold text-zinc-100 font-mono">
+                  {formatSpeed(totalUploadBps)}
+                </span>
+              </div>
+            </div>
+
+            <div className="bg-[#131417] border border-[#222429] rounded-xl p-3.5 flex items-center space-x-3 shadow-sm">
+              <div className="w-9 h-9 rounded-lg bg-zinc-800 text-zinc-200 border border-zinc-700/60 flex items-center justify-center shrink-0">
+                <Download className="w-4 h-4" />
+              </div>
+              <div>
+                <span className="text-[10px] text-zinc-500 uppercase tracking-wider font-semibold block">
+                  Active Download
+                </span>
+                <span className="text-sm font-bold text-zinc-100 font-mono">
+                  {formatSpeed(totalDownloadBps)}
+                </span>
+              </div>
+            </div>
+
+            <div className="bg-[#131417] border border-[#222429] rounded-xl p-3.5 flex items-center space-x-3 shadow-sm">
+              <div className="w-9 h-9 rounded-lg bg-zinc-800 text-zinc-200 border border-zinc-700/60 flex items-center justify-center shrink-0">
+                <Activity className="w-4 h-4" />
+              </div>
+              <div>
+                <span className="text-[10px] text-zinc-500 uppercase tracking-wider font-semibold block">
+                  Active Streams
+                </span>
+                <span className="text-sm font-bold text-zinc-100 font-mono">
+                  {activeTransfers.length} {activeTransfers.length === 1 ? 'Stream' : 'Streams'} Active
+                </span>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Filter Pills */}
+        <div className="flex border-b border-[#222429] bg-[#131417] p-1 rounded-xl text-xs space-x-1 shadow-sm">
+          <button
+            onClick={() => setFilterStatus('all')}
+            className={`px-3.5 py-1.5 rounded-lg font-semibold transition-all ${
+              filterStatus === 'all'
+                ? 'bg-zinc-800 text-zinc-100 shadow-sm border border-zinc-700/80'
+                : 'text-zinc-400 hover:text-zinc-200'
+            }`}
+          >
+            All ({transfers.length})
+          </button>
+          <button
+            onClick={() => setFilterStatus('active')}
+            className={`px-3.5 py-1.5 rounded-lg font-semibold transition-all ${
+              filterStatus === 'active'
+                ? 'bg-zinc-800 text-zinc-100 shadow-sm border border-zinc-700/80'
+                : 'text-zinc-400 hover:text-zinc-200'
+            }`}
+          >
+            Active ({activeTransfers.length})
+          </button>
+          <button
+            onClick={() => setFilterStatus('completed')}
+            className={`px-3.5 py-1.5 rounded-lg font-semibold transition-all ${
+              filterStatus === 'completed'
+                ? 'bg-zinc-800 text-zinc-100 shadow-sm border border-zinc-700/80'
+                : 'text-zinc-400 hover:text-zinc-200'
+            }`}
+          >
+            Completed ({completedTransfers.length})
+          </button>
+          <button
+            onClick={() => setFilterStatus('other')}
+            className={`px-3.5 py-1.5 rounded-lg font-semibold transition-all ${
+              filterStatus === 'other'
+                ? 'bg-zinc-800 text-zinc-100 shadow-sm border border-zinc-700/80'
+                : 'text-zinc-400 hover:text-zinc-200'
+            }`}
+          >
+            Paused / Other ({otherTransfers.length})
+          </button>
+        </div>
+
+        {/* Transfers List */}
+        {filteredTransfers.length === 0 ? (
+          <div className="bg-[#131417] border border-[#222429] rounded-2xl p-12 text-center shadow-sm">
+            <div className="w-12 h-12 rounded-xl bg-[#18191d] border border-[#26282e] flex items-center justify-center text-zinc-500 mx-auto mb-3 shadow-inner">
               <ArrowUpDown className="w-6 h-6" />
             </div>
-            <h4 className="text-sm font-semibold text-slate-300 mb-1">
-              No Transfer Activity
+            <h4 className="text-sm font-semibold text-zinc-300 mb-1">
+              {transfers.length === 0 ? 'No Transfers in Progress' : 'No Transfers Match Filter'}
             </h4>
-            <p className="text-xs text-slate-500 max-w-sm mx-auto">
-              When you upload or download files, per-chunk transfer progress and verification will be journaled here automatically.
+            <p className="text-xs text-zinc-500 max-w-sm mx-auto leading-relaxed">
+              {transfers.length === 0
+                ? 'Upload or download a file to monitor real-time transfer progress and speed here.'
+                : 'Switch filter tab to see other transfer items.'}
             </p>
           </div>
         ) : (
           <div className="space-y-3">
-            {transfers.map((tx) => {
+            {filteredTransfers.map((tx) => {
               const isUpload = tx.transfer_type === 'upload';
               const stats = liveStats[tx.id];
               const effectiveTransferred =
@@ -206,47 +334,40 @@ export const TransfersView: React.FC<TransfersViewProps> = ({
               return (
                 <div
                   key={tx.id}
-                  className="bg-slate-950 border border-slate-800 rounded-xl p-4 flex flex-col space-y-3 hover:border-slate-700 transition-colors"
+                  className="bg-[#131417] border border-[#222429] rounded-2xl p-4 flex flex-col space-y-3 hover:border-[#32353c] transition-all shadow-sm"
                 >
                   <div className="flex items-center justify-between">
-                    <div className="flex items-center space-x-3">
-                      <div
-                        className={`w-8 h-8 rounded-lg flex items-center justify-center ${
-                          isUpload
-                            ? 'bg-cyan-500/10 text-cyan-400 border border-cyan-500/20'
-                            : 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
-                        }`}
-                      >
-                        {isUpload ? (
-                          <UploadCloud className="w-4 h-4" />
-                        ) : (
-                          <Download className="w-4 h-4" />
-                        )}
+                    <div className="flex items-center space-x-3 min-w-0">
+                      <div className="w-9 h-9 rounded-xl flex items-center justify-center shrink-0 bg-zinc-800 text-zinc-200 border border-zinc-700/60">
+                        {isUpload ? <UploadCloud className="w-4 h-4" /> : <Download className="w-4 h-4" />}
                       </div>
-                      <div>
-                        <div className="text-xs font-semibold text-slate-200">{tx.name}</div>
-                        <div className="text-[10px] text-slate-500 font-mono">
+                      <div className="min-w-0">
+                        <div className="text-xs font-semibold text-zinc-200 truncate" title={tx.name}>
+                          {tx.name}
+                        </div>
+                        <div className="text-[10px] text-zinc-500 font-mono truncate mt-0.5">
                           {isUpload ? 'Upload' : 'Download'} • {tx.package_id}
                         </div>
                       </div>
                     </div>
 
-                    <div className="flex items-center space-x-3">
+                    <div className="flex items-center space-x-3 shrink-0">
                       <div className="text-right font-mono text-xs">
-                        <span className="text-slate-300 font-semibold">
+                        <span className="text-zinc-200 font-semibold">
                           {formatSize(effectiveTransferred)}
                         </span>
-                        <span className="text-slate-500"> / {formatSize(tx.total_bytes)}</span>
+                        <span className="text-zinc-500"> / {formatSize(tx.total_bytes)}</span>
                       </div>
+
                       {getStatusBadge(tx.status)}
 
                       {/* Action Controls */}
-                      <div className="flex items-center space-x-1 pl-2 border-l border-slate-800">
+                      <div className="flex items-center space-x-1 pl-2 border-l border-[#222429]">
                         {isTransferring && onPause && (
                           <button
                             onClick={() => onPause(tx.id)}
                             title="Pause Transfer"
-                            className="p-1.5 rounded hover:bg-slate-800 text-slate-400 hover:text-amber-400 transition-colors"
+                            className="p-1.5 rounded-lg text-zinc-400 hover:text-amber-400 hover:bg-zinc-800 transition-colors"
                           >
                             <Pause className="w-3.5 h-3.5" />
                           </button>
@@ -256,7 +377,7 @@ export const TransfersView: React.FC<TransfersViewProps> = ({
                           <button
                             onClick={() => onResume(tx.id)}
                             title="Resume Transfer"
-                            className="p-1.5 rounded hover:bg-slate-800 text-slate-400 hover:text-emerald-400 transition-colors"
+                            className="p-1.5 rounded-lg text-zinc-400 hover:text-emerald-400 hover:bg-zinc-800 transition-colors"
                           >
                             <Play className="w-3.5 h-3.5" />
                           </button>
@@ -266,7 +387,7 @@ export const TransfersView: React.FC<TransfersViewProps> = ({
                           <button
                             onClick={() => onCancel(tx.id)}
                             title="Cancel Transfer & Clean Up"
-                            className="p-1.5 rounded hover:bg-slate-800 text-slate-400 hover:text-rose-400 transition-colors"
+                            className="p-1.5 rounded-lg text-zinc-400 hover:text-rose-400 hover:bg-rose-500/10 transition-colors"
                           >
                             <XCircle className="w-3.5 h-3.5" />
                           </button>
@@ -282,7 +403,7 @@ export const TransfersView: React.FC<TransfersViewProps> = ({
                               }
                             }}
                             title="Show in Folder"
-                            className="p-1.5 rounded hover:bg-slate-800 text-slate-400 hover:text-emerald-400 transition-colors"
+                            className="p-1.5 rounded-lg text-zinc-400 hover:text-emerald-400 hover:bg-zinc-800 transition-colors"
                           >
                             <FolderOpen className="w-3.5 h-3.5" />
                           </button>
@@ -292,7 +413,7 @@ export const TransfersView: React.FC<TransfersViewProps> = ({
                           <button
                             onClick={() => onDelete(tx.id)}
                             title="Remove from History"
-                            className="p-1.5 rounded hover:bg-slate-800 text-slate-400 hover:text-rose-400 transition-colors"
+                            className="p-1.5 rounded-lg text-zinc-400 hover:text-rose-400 hover:bg-rose-500/10 transition-colors"
                           >
                             <Trash2 className="w-3.5 h-3.5" />
                           </button>
@@ -303,10 +424,10 @@ export const TransfersView: React.FC<TransfersViewProps> = ({
 
                   {/* Real-time stats strip */}
                   {isTransferring && stats && (
-                    <div className="flex items-center justify-between text-[11px] font-mono text-slate-400 px-0.5">
+                    <div className="flex items-center justify-between text-[11px] font-mono text-zinc-400 px-0.5">
                       <div className="flex items-center space-x-2">
                         {stats.stage && (
-                          <span className="capitalize text-cyan-400 font-semibold">
+                          <span className="capitalize text-zinc-200 font-semibold">
                             {stats.stage.replace('_', ' ')}
                           </span>
                         )}
@@ -316,19 +437,20 @@ export const TransfersView: React.FC<TransfersViewProps> = ({
                           </span>
                         )}
                         {stats.target_label && (
-                          <span className="text-slate-500">
+                          <span className="text-zinc-500">
                             ({stats.target_label})
                           </span>
                         )}
                       </div>
                       <div className="flex items-center space-x-3">
                         {stats.speed_bps > 0 && (
-                          <span className="text-cyan-400 font-semibold">
-                            ⚡ {formatSpeed(stats.speed_bps)}
+                          <span className="text-zinc-200 font-semibold flex items-center space-x-1">
+                            <Zap className="w-3 h-3 text-zinc-200" />
+                            <span>{formatSpeed(stats.speed_bps)}</span>
                           </span>
                         )}
                         {stats.eta_seconds > 0 && (
-                          <span className="text-slate-400">
+                          <span className="text-zinc-400">
                             ⏱ ETA: {formatEta(stats.eta_seconds)}
                           </span>
                         )}
@@ -337,7 +459,7 @@ export const TransfersView: React.FC<TransfersViewProps> = ({
                   )}
 
                   {/* Progress bar */}
-                  <div className="w-full bg-slate-900 rounded-full h-1.5 overflow-hidden">
+                  <div className="w-full bg-[#18191d] rounded-full h-1.5 overflow-hidden">
                     <div
                       className={`h-full rounded-full transition-all duration-300 ${
                         tx.status === 'completed'
@@ -346,14 +468,14 @@ export const TransfersView: React.FC<TransfersViewProps> = ({
                           ? 'bg-amber-500'
                           : tx.status === 'failed' || tx.status === 'cancelled'
                           ? 'bg-rose-500'
-                          : 'bg-cyan-500'
+                          : 'bg-zinc-100'
                       }`}
                       style={{ width: `${percent}%` }}
                     />
                   </div>
 
                   {tx.error_message && (
-                    <div className="text-[11px] text-rose-400 font-mono bg-rose-500/10 border border-rose-500/20 rounded p-2">
+                    <div className="text-[11px] text-rose-400 font-mono bg-rose-500/10 border border-rose-500/20 rounded-xl p-2.5">
                       Error: {tx.error_message}
                     </div>
                   )}

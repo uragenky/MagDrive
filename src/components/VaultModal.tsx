@@ -33,6 +33,7 @@ export const VaultModal: React.FC<VaultModalProps> = ({
   // Create form state
   const [newName, setNewName] = useState('');
   const [newPassphrase, setNewPassphrase] = useState('');
+  const [confirmPassphrase, setConfirmPassphrase] = useState('');
   const [newTargets, setNewTargets] = useState<VaultTarget[]>([
     { label: 'Primary Drive', target_type: 'SharedFolder', target_id: '' },
   ]);
@@ -51,6 +52,7 @@ export const VaultModal: React.FC<VaultModalProps> = ({
     if (isOpen) {
       setActiveTab(initialMode);
       setErrorMsg(null);
+      setConfirmPassphrase('');
     }
   }, [isOpen, initialMode]);
 
@@ -60,6 +62,11 @@ export const VaultModal: React.FC<VaultModalProps> = ({
     e.preventDefault();
     if (!newName.trim() || !newPassphrase.trim()) {
       setErrorMsg('Vault name and passphrase are required.');
+      return;
+    }
+
+    if (newPassphrase !== confirmPassphrase) {
+      setErrorMsg('Passphrases do not match. Please verify your master passphrase.');
       return;
     }
 
@@ -136,26 +143,26 @@ export const VaultModal: React.FC<VaultModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4 z-50">
-      <div className="bg-slate-950 border border-slate-800 rounded-2xl w-full max-w-lg overflow-hidden shadow-2xl flex flex-col max-h-[85vh]">
+    <div className="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+      <div className="bg-[#131417] border border-[#222429] rounded-2xl w-full max-w-lg overflow-hidden shadow-2xl flex flex-col max-h-[85vh]">
         {/* Header */}
-        <div className="flex items-center justify-between p-5 border-b border-slate-800">
+        <div className="flex items-center justify-between p-5 border-b border-[#222429]">
           <div className="flex items-center space-x-2.5">
-            <FolderLock className="w-5 h-5 text-cyan-400" />
-            <h3 className="text-sm font-bold text-slate-100">
-              {activeTab === 'create' ? 'Create Personal Vault' : 'Import Personal Vault'}
+            <FolderLock className="w-5 h-5 text-zinc-300" />
+            <h3 className="text-sm font-bold text-zinc-100">
+              {activeTab === 'create' ? 'Create Vault' : 'Import Existing Vault'}
             </h3>
           </div>
           <button
             onClick={onClose}
-            className="p-1.5 rounded-lg text-slate-400 hover:text-slate-200 hover:bg-slate-900 transition-colors"
+            className="p-1.5 rounded-lg text-zinc-400 hover:text-zinc-200 hover:bg-[#18191d] transition-colors"
           >
             <X className="w-4 h-4" />
           </button>
         </div>
 
         {/* Mode Switcher Tabs */}
-        <div className="flex border-b border-slate-800 bg-slate-900/60 p-1 text-xs">
+        <div className="flex border-b border-[#222429] bg-[#18191d]/60 p-1 text-xs">
           <button
             onClick={() => {
               setActiveTab('create');
@@ -163,8 +170,8 @@ export const VaultModal: React.FC<VaultModalProps> = ({
             }}
             className={`flex-1 py-2 rounded-lg font-semibold flex items-center justify-center space-x-1.5 transition-all ${
               activeTab === 'create'
-                ? 'bg-slate-800 text-cyan-400 shadow-sm border border-slate-700'
-                : 'text-slate-400 hover:text-slate-200'
+                ? 'bg-zinc-800 text-zinc-100 shadow-sm border border-zinc-700/80'
+                : 'text-zinc-400 hover:text-zinc-200'
             }`}
           >
             <PlusCircle className="w-3.5 h-3.5" />
@@ -177,12 +184,12 @@ export const VaultModal: React.FC<VaultModalProps> = ({
             }}
             className={`flex-1 py-2 rounded-lg font-semibold flex items-center justify-center space-x-1.5 transition-all ${
               activeTab === 'import'
-                ? 'bg-slate-800 text-cyan-400 shadow-sm border border-slate-700'
-                : 'text-slate-400 hover:text-slate-200'
+                ? 'bg-zinc-800 text-zinc-100 shadow-sm border border-zinc-700/80'
+                : 'text-zinc-400 hover:text-zinc-200'
             }`}
           >
             <DownloadCloud className="w-3.5 h-3.5" />
-            <span>Import Token (.magvault)</span>
+            <span>Import Existing Vault</span>
           </button>
         </div>
 
@@ -198,33 +205,49 @@ export const VaultModal: React.FC<VaultModalProps> = ({
           {activeTab === 'create' && (
             <form onSubmit={handleCreateSubmit} className="space-y-4">
               <div>
-                <label className="font-semibold text-slate-400 block mb-1">Vault Name</label>
+                <label className="font-semibold text-zinc-400 block mb-1">Vault Name</label>
                 <input
                   type="text"
                   placeholder="e.g. My Secure Drive"
                   value={newName}
                   onChange={(e) => setNewName(e.target.value)}
-                  className="w-full bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 text-slate-200 focus:outline-none focus:border-cyan-500"
+                  className="w-full bg-[#18191d] border border-[#26282e] rounded-lg px-3 py-2 text-zinc-200 focus:outline-none focus:border-zinc-500"
                 />
               </div>
 
               <div>
-                <label className="font-semibold text-slate-400 block mb-1">
-                  Master Passphrase (Argon2id Key Derivation)
+                <label className="font-semibold text-zinc-400 block mb-1">
+                  Master Passphrase
                 </label>
                 <input
                   type="password"
-                  placeholder="Secret passphrase for vault encryption"
+                  placeholder="Secret passphrase to lock and encrypt files"
                   value={newPassphrase}
                   onChange={(e) => setNewPassphrase(e.target.value)}
-                  className="w-full bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 text-slate-200 font-mono focus:outline-none focus:border-cyan-500"
+                  className="w-full bg-[#18191d] border border-[#26282e] rounded-lg px-3 py-2 text-zinc-200 font-mono focus:outline-none focus:border-zinc-500"
+                />
+                <p className="text-[10px] text-zinc-500 mt-1">
+                  Zero-Knowledge: Used to encrypt and unlock your files. Keep this safe; it cannot be recovered if forgotten.
+                </p>
+              </div>
+
+              <div>
+                <label className="font-semibold text-zinc-400 block mb-1">
+                  Confirm Master Passphrase
+                </label>
+                <input
+                  type="password"
+                  placeholder="Re-enter your master passphrase"
+                  value={confirmPassphrase}
+                  onChange={(e) => setConfirmPassphrase(e.target.value)}
+                  className="w-full bg-[#18191d] border border-[#26282e] rounded-lg px-3 py-2 text-zinc-200 font-mono focus:outline-none focus:border-zinc-500"
                 />
               </div>
 
               <div>
                 <div className="flex items-center justify-between mb-1.5">
-                  <label className="font-semibold text-slate-400 block">
-                    Target Google Drive / Folder ID:
+                  <label className="font-semibold text-zinc-400 block">
+                    Google Drive Folder ID:
                   </label>
                   <button
                     type="button"
@@ -238,9 +261,9 @@ export const VaultModal: React.FC<VaultModalProps> = ({
                         },
                       ])
                     }
-                    className="text-[11px] text-cyan-400 hover:text-cyan-300 font-semibold"
+                    className="text-[11px] text-zinc-300 hover:text-white font-semibold"
                   >
-                    + Add Parity Drive (Optional)
+                    + Add Backup Drive (Optional)
                   </button>
                 </div>
                 <div className="space-y-2">
@@ -255,24 +278,24 @@ export const VaultModal: React.FC<VaultModalProps> = ({
                           copy[idx].label = e.target.value;
                           setNewTargets(copy);
                         }}
-                        className="w-1/3 bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 text-slate-200 focus:outline-none focus:border-cyan-500"
+                        className="w-1/3 bg-[#18191d] border border-[#26282e] rounded-lg px-3 py-2 text-zinc-200 focus:outline-none focus:border-zinc-500"
                       />
                       <input
                         type="text"
-                        placeholder="Google Drive Folder ID (e.g. 1AbC...)"
+                        placeholder="Google Drive Folder ID"
                         value={t.target_id}
                         onChange={(e) => {
                           const copy = [...newTargets];
                           copy[idx].target_id = e.target.value;
                           setNewTargets(copy);
                         }}
-                        className="flex-1 bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 text-slate-200 font-mono focus:outline-none focus:border-cyan-500"
+                        className="flex-1 bg-[#18191d] border border-[#26282e] rounded-lg px-3 py-2 text-zinc-200 font-mono focus:outline-none focus:border-zinc-500"
                       />
                       {newTargets.length > 1 && (
                         <button
                           type="button"
                           onClick={() => setNewTargets(newTargets.filter((_, i) => i !== idx))}
-                          className="px-2 text-slate-500 hover:text-rose-400 text-xs"
+                          className="px-2 text-zinc-500 hover:text-rose-400 text-xs"
                         >
                           ✕
                         </button>
@@ -280,24 +303,27 @@ export const VaultModal: React.FC<VaultModalProps> = ({
                     </div>
                   ))}
                 </div>
-                <p className="text-[10px] text-slate-500 mt-1.5">
-                  * For a basic personal vault, 1 primary Folder ID is sufficient. You can add extra drives for multi-drive Reed-Solomon protection.
+                <p className="text-[10px] text-zinc-500 mt-1.5">
+                  1 drive is sufficient for basic encrypted storage. Adding 2 or more drives enables automatic parity redundancy and hardware failure protection.
+                </p>
+                <p className="text-[10px] text-zinc-500 mt-0.5">
+                  Tip: Open the folder in Google Drive and copy the code after <span className="font-mono text-zinc-400">/folders/</span> in your browser URL bar.
                 </p>
               </div>
 
               <button
                 type="submit"
                 disabled={isLoading}
-                className="w-full py-2.5 rounded-lg font-bold bg-cyan-600 hover:bg-cyan-500 text-white transition-all shadow-md shadow-cyan-600/30 disabled:opacity-50 mt-4"
+                className="w-full py-2.5 rounded-xl font-bold bg-zinc-100 hover:bg-white active:bg-zinc-200 text-zinc-950 transition-all shadow-sm border border-white/20 disabled:opacity-50 mt-4"
               >
-                {isLoading ? 'Creating Vault...' : 'Create Vault Now'}
+                {isLoading ? 'Creating Vault...' : 'Create Vault'}
               </button>
             </form>
           )}
 
           {activeTab === 'import' && (
             <form onSubmit={handleImportSubmit} className="space-y-4">
-              <div className="flex border border-slate-800 rounded-lg p-1 bg-slate-900/80 text-xs">
+              <div className="flex border border-[#26282e] rounded-lg p-1 bg-[#18191d] text-xs">
                 <button
                   type="button"
                   onClick={() => {
@@ -306,8 +332,8 @@ export const VaultModal: React.FC<VaultModalProps> = ({
                   }}
                   className={`flex-1 py-1.5 rounded-md font-semibold flex items-center justify-center space-x-1.5 transition-all ${
                     importSourceType === 'file'
-                      ? 'bg-slate-800 text-cyan-400 border border-slate-700 shadow-sm'
-                      : 'text-slate-400 hover:text-slate-200'
+                      ? 'bg-zinc-800 text-zinc-100 border border-zinc-700/80 shadow-sm'
+                      : 'text-zinc-400 hover:text-zinc-200'
                   }`}
                 >
                   <FileText className="w-3.5 h-3.5" />
@@ -321,8 +347,8 @@ export const VaultModal: React.FC<VaultModalProps> = ({
                   }}
                   className={`flex-1 py-1.5 rounded-md font-semibold flex items-center justify-center space-x-1.5 transition-all ${
                     importSourceType === 'token'
-                      ? 'bg-slate-800 text-cyan-400 border border-slate-700 shadow-sm'
-                      : 'text-slate-400 hover:text-slate-200'
+                      ? 'bg-zinc-800 text-zinc-100 border border-zinc-700/80 shadow-sm'
+                      : 'text-zinc-400 hover:text-zinc-200'
                   }`}
                 >
                   <UploadCloud className="w-3.5 h-3.5" />
@@ -332,29 +358,29 @@ export const VaultModal: React.FC<VaultModalProps> = ({
 
               {importSourceType === 'file' ? (
                 <div>
-                  <label className="font-semibold text-slate-400 block mb-1">
+                  <label className="font-semibold text-zinc-400 block mb-1">
                     Select Backup File (vault.json):
                   </label>
                   <div className="flex items-center space-x-2">
                     <button
                       type="button"
                       onClick={handlePickJsonFile}
-                      className="flex-1 py-2.5 px-3 bg-slate-900 hover:bg-slate-800 border border-slate-800 hover:border-slate-700 rounded-lg text-slate-300 text-xs flex items-center justify-center space-x-2 transition-all font-mono"
+                      className="flex-1 py-2.5 px-3 bg-[#18191d] hover:bg-[#222428] border border-[#26282e] rounded-xl text-zinc-300 text-xs flex items-center justify-center space-x-2 transition-all font-mono"
                     >
-                      <FileText className="w-4 h-4 text-cyan-400" />
+                      <FileText className="w-4 h-4 text-zinc-300" />
                       <span>{loadedFileName ? loadedFileName : 'Browse vault.json file...'}</span>
                     </button>
                     {importJsonContent && (
                       <span className="text-[11px] text-emerald-400 font-semibold shrink-0">✓ File loaded</span>
                     )}
                   </div>
-                  <p className="text-[10px] text-slate-500 mt-1">
+                  <p className="text-[10px] text-zinc-500 mt-1">
                     * Choose a backup file previously saved on your hard drive or USB drive.
                   </p>
                 </div>
               ) : (
                 <div>
-                  <label className="font-semibold text-slate-400 block mb-1">
+                  <label className="font-semibold text-zinc-400 block mb-1">
                     Paste Vault Export Token (.magvault):
                   </label>
                   <textarea
@@ -362,13 +388,13 @@ export const VaultModal: React.FC<VaultModalProps> = ({
                     placeholder="Paste encrypted base64 vault token string here..."
                     value={importToken}
                     onChange={(e) => setImportToken(e.target.value)}
-                    className="w-full bg-slate-900 border border-slate-800 rounded-lg p-3 text-slate-200 font-mono text-xs focus:outline-none focus:border-cyan-500"
+                    className="w-full bg-[#18191d] border border-[#26282e] rounded-lg p-3 text-zinc-200 font-mono text-xs focus:outline-none focus:border-zinc-500"
                   />
                 </div>
               )}
 
               <div>
-                <label className="font-semibold text-slate-400 block mb-1">
+                <label className="font-semibold text-zinc-400 block mb-1">
                   Vault Passphrase
                 </label>
                 <input
@@ -376,14 +402,14 @@ export const VaultModal: React.FC<VaultModalProps> = ({
                   placeholder="Passphrase used when this vault was created"
                   value={importPassphrase}
                   onChange={(e) => setImportPassphrase(e.target.value)}
-                  className="w-full bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 text-slate-200 font-mono focus:outline-none focus:border-cyan-500"
+                  className="w-full bg-[#18191d] border border-[#26282e] rounded-lg px-3 py-2 text-zinc-200 font-mono focus:outline-none focus:border-zinc-500"
                 />
               </div>
 
               <button
                 type="submit"
                 disabled={isLoading}
-                className="w-full py-2.5 rounded-lg font-bold bg-cyan-600 hover:bg-cyan-500 text-white transition-all shadow-md shadow-cyan-600/30 disabled:opacity-50 mt-2"
+                className="w-full py-2.5 rounded-xl font-bold bg-zinc-100 hover:bg-white active:bg-zinc-200 text-zinc-950 transition-all shadow-sm border border-white/20 disabled:opacity-50 mt-2"
               >
                 {isLoading ? 'Unlocking Vault...' : 'Unlock & Import Vault'}
               </button>

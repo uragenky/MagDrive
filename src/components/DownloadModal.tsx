@@ -258,9 +258,9 @@ export const DownloadModal: React.FC<DownloadModalProps> = ({
 
   return (
     <div className="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 z-50 animate-fade-in">
-      <div className="bg-slate-950 border border-slate-800 rounded-2xl w-full max-w-lg overflow-hidden shadow-2xl transition-all">
+      <div className="bg-[#131417] border border-[#222429] rounded-2xl w-full max-w-lg overflow-hidden shadow-2xl transition-all">
         {/* Header */}
-        <div className="flex items-center justify-between p-5 border-b border-slate-800">
+        <div className="flex items-center justify-between p-5 border-b border-[#222429]">
           <div className="flex items-center space-x-2.5">
             <div
               className={`w-8 h-8 rounded-lg flex items-center justify-center ${
@@ -269,8 +269,8 @@ export const DownloadModal: React.FC<DownloadModalProps> = ({
                   : downloadStatus === 'failed'
                   ? 'bg-rose-500/10 text-rose-400 border border-rose-500/20'
                   : downloadStatus === 'downloading'
-                  ? 'bg-cyan-500/10 text-cyan-400 border border-cyan-500/20'
-                  : 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
+                  ? 'bg-zinc-800 text-zinc-200 border border-zinc-700/60'
+                  : 'bg-zinc-800 text-zinc-200 border border-zinc-700/60'
               }`}
             >
               {downloadStatus === 'completed' ? (
@@ -284,29 +284,29 @@ export const DownloadModal: React.FC<DownloadModalProps> = ({
               )}
             </div>
             <div>
-              <h3 className="text-sm font-bold text-slate-100">
+              <h3 className="text-sm font-bold text-zinc-100">
                 {downloadStatus === 'completed'
                   ? 'Download Complete'
                   : downloadStatus === 'failed'
                   ? 'Download Failed'
                   : downloadStatus === 'downloading'
                   ? 'Downloading File'
-                  : 'Save Downloaded File'}
+                  : 'Download File'}
               </h3>
-              <p className="text-[11px] text-slate-500">
+              <p className="text-[11px] text-zinc-400">
                 {downloadStatus === 'completed'
-                  ? 'File reconstructed & verified successfully'
+                  ? 'File downloaded and verified intact'
                   : downloadStatus === 'failed'
-                  ? 'An error occurred during transfer or reconstruction'
+                  ? 'Transfer failed. Check drive connectivity and retry.'
                   : downloadStatus === 'downloading'
-                  ? 'Streaming direct-to-disk with Reed-Solomon parity'
-                  : 'Choose destination directory and confirm download'}
+                  ? 'Downloading and decrypting directly to your computer'
+                  : 'Choose a destination folder to begin'}
               </p>
             </div>
           </div>
           <button
             onClick={onClose}
-            className="p-1.5 rounded-lg text-slate-400 hover:text-slate-200 hover:bg-slate-900 transition-colors"
+            className="p-1.5 rounded-lg text-zinc-400 hover:text-zinc-200 hover:bg-[#18191d] transition-colors"
             title={downloadStatus === 'downloading' ? 'Close to background (download continues)' : 'Close'}
           >
             <X className="w-4 h-4" />
@@ -316,27 +316,27 @@ export const DownloadModal: React.FC<DownloadModalProps> = ({
         {/* Content */}
         <div className="p-6 space-y-4 text-xs">
           {/* File Card */}
-          <div className="bg-slate-900/80 border border-slate-800 rounded-xl p-4 space-y-2.5">
+          <div className="bg-[#18191d] border border-[#26282e] rounded-xl p-4 space-y-2.5">
             <div className="flex items-start justify-between">
               <div className="flex items-center space-x-2.5 min-w-0">
-                <FileText className="w-5 h-5 text-emerald-400 shrink-0" />
+                <FileText className="w-5 h-5 text-zinc-300 shrink-0" />
                 <div className="min-w-0">
-                  <span className="font-semibold text-slate-100 text-xs block truncate" title={fileName}>
+                  <span className="font-semibold text-zinc-100 text-xs block truncate" title={fileName}>
                     {fileName}
                   </span>
-                  <span className="text-[11px] text-slate-400 font-mono">
+                  <span className="text-[11px] text-zinc-400 font-mono">
                     {formatSize(fileSize)}
                   </span>
                 </div>
               </div>
-              <div className="flex items-center space-x-1 px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 text-[10px] font-mono shrink-0">
-                <ShieldCheck className="w-3 h-3" />
+              <div className="flex items-center space-x-1 px-2 py-0.5 rounded bg-zinc-800 text-zinc-200 border border-zinc-700 text-[10px] font-mono shrink-0">
+                <ShieldCheck className="w-3 h-3 text-emerald-400" />
                 <span>AES-256 + RS 2+1</span>
               </div>
             </div>
 
             {originalSha256 && (
-              <div className="pt-2 border-t border-slate-800/80 flex items-center justify-between text-[10px] text-slate-500 font-mono">
+              <div className="pt-2 border-t border-[#222429] flex items-center justify-between text-[10px] text-zinc-500 font-mono">
                 <span>Checksum:</span>
                 <span className="truncate max-w-[280px]" title={originalSha256}>
                   {originalSha256.substring(0, 16)}...{originalSha256.substring(originalSha256.length - 8)}
@@ -347,11 +347,11 @@ export const DownloadModal: React.FC<DownloadModalProps> = ({
 
           {/* ACTIVE DOWNLOADING PROGRESS VIEW */}
           {downloadStatus === 'downloading' && (
-            <div className="bg-slate-900/90 border border-cyan-500/30 rounded-xl p-4 space-y-3.5 shadow-lg shadow-cyan-950/20 animate-fade-in">
+            <div className="bg-[#18191d] border border-[#26282e] rounded-xl p-4 space-y-3.5 shadow-lg animate-fade-in">
               <div className="flex items-center justify-between">
                 <div className="flex items-center space-x-2">
-                  <Loader2 className="w-4 h-4 text-cyan-400 animate-spin" />
-                  <span className="font-semibold text-slate-200">
+                  <Loader2 className="w-4 h-4 text-zinc-200 animate-spin" />
+                  <span className="font-semibold text-zinc-200">
                     {progress.targetLabel ||
                       (progress.stage === 'verifying'
                         ? 'Verifying cryptographic integrity...'
@@ -360,42 +360,42 @@ export const DownloadModal: React.FC<DownloadModalProps> = ({
                         : 'Downloading from storage nodes...')}
                   </span>
                 </div>
-                <span className="text-cyan-400 font-mono font-bold text-sm">
+                <span className="text-zinc-100 font-mono font-bold text-sm">
                   {progress.percent}%
                 </span>
               </div>
 
               {/* Progress Bar */}
-              <div className="w-full bg-slate-950 rounded-full h-2.5 overflow-hidden p-0.5 border border-slate-800">
+              <div className="w-full bg-[#131417] rounded-full h-2.5 overflow-hidden p-0.5 border border-[#222429]">
                 <div
-                  className="h-full rounded-full bg-gradient-to-r from-cyan-500 to-emerald-400 transition-all duration-300 shadow-sm shadow-cyan-500/50"
+                  className="h-full rounded-full bg-zinc-100 transition-all duration-300"
                   style={{ width: `${Math.max(5, progress.percent)}%` }}
                 />
               </div>
 
               {/* Metrics Grid */}
               <div className="grid grid-cols-3 gap-2 pt-1 font-mono text-[11px]">
-                <div className="bg-slate-950/80 rounded-lg p-2 border border-slate-800/80">
-                  <div className="text-[10px] text-slate-500">Transferred</div>
-                  <div className="text-slate-200 font-semibold truncate">
+                <div className="bg-[#131417] rounded-lg p-2 border border-[#222429]">
+                  <div className="text-[10px] text-zinc-500">Transferred</div>
+                  <div className="text-zinc-200 font-semibold truncate">
                     {formatSize(progress.transferredBytes)}
                   </div>
                 </div>
-                <div className="bg-slate-950/80 rounded-lg p-2 border border-slate-800/80">
-                  <div className="text-[10px] text-slate-500">Speed</div>
-                  <div className="text-cyan-400 font-semibold truncate">
+                <div className="bg-[#131417] rounded-lg p-2 border border-[#222429]">
+                  <div className="text-[10px] text-zinc-500">Speed</div>
+                  <div className="text-zinc-200 font-semibold truncate">
                     ⚡ {formatSpeed(progress.speedBps)}
                   </div>
                 </div>
-                <div className="bg-slate-950/80 rounded-lg p-2 border border-slate-800/80">
-                  <div className="text-[10px] text-slate-500">ETA</div>
-                  <div className="text-slate-200 font-semibold truncate">
+                <div className="bg-[#131417] rounded-lg p-2 border border-[#222429]">
+                  <div className="text-[10px] text-zinc-500">ETA</div>
+                  <div className="text-zinc-200 font-semibold truncate">
                     ⏱ {formatEta(progress.etaSeconds)}
                   </div>
                 </div>
               </div>
 
-              <div className="text-[10px] text-slate-500 flex items-center justify-between">
+              <div className="text-[10px] text-zinc-500 flex items-center justify-between">
                 <span>
                   Shard: {progress.currentShard} / {progress.totalShards}
                 </span>
@@ -413,14 +413,14 @@ export const DownloadModal: React.FC<DownloadModalProps> = ({
                 <CheckCircle2 className="w-4 h-4 shrink-0" />
                 <span>File successfully downloaded and integrity verified!</span>
               </div>
-              <div className="bg-slate-950/80 border border-slate-800 rounded-lg p-2.5 font-mono text-[11px] text-slate-300 break-all select-all">
+              <div className="bg-[#131417] border border-[#222429] rounded-lg p-2.5 font-mono text-[11px] text-zinc-300 break-all select-all">
                 {completedPath || destinationPath}
               </div>
               <div className="flex items-center space-x-2 pt-1">
                 <button
                   type="button"
                   onClick={handleRevealItem}
-                  className="flex-1 flex items-center justify-center space-x-1.5 px-3 py-2 rounded-xl text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-emerald-400 border border-slate-700 transition-all shadow-sm"
+                  className="flex-1 flex items-center justify-center space-x-1.5 px-3 py-2 rounded-xl text-xs font-semibold bg-[#18191d] hover:bg-[#222428] text-emerald-400 border border-[#26282e] transition-all shadow-sm"
                 >
                   <FolderOpen className="w-3.5 h-3.5" />
                   <span>Show in Folder</span>
@@ -428,7 +428,7 @@ export const DownloadModal: React.FC<DownloadModalProps> = ({
                 <button
                   type="button"
                   onClick={handleOpenFile}
-                  className="flex-1 flex items-center justify-center space-x-1.5 px-3 py-2 rounded-xl text-xs font-semibold bg-emerald-600 hover:bg-emerald-500 text-white transition-all shadow-sm shadow-emerald-600/30"
+                  className="flex-1 flex items-center justify-center space-x-1.5 px-3 py-2 rounded-xl text-xs font-semibold bg-zinc-100 hover:bg-white text-zinc-950 transition-all shadow-sm border border-white/20"
                 >
                   <ExternalLink className="w-3.5 h-3.5" />
                   <span>Open File</span>
@@ -444,7 +444,7 @@ export const DownloadModal: React.FC<DownloadModalProps> = ({
                 <AlertTriangle className="w-4 h-4 shrink-0 text-rose-400" />
                 <span>Download Failed</span>
               </div>
-              <p className="text-[11px] text-rose-200 font-mono bg-slate-950/80 border border-rose-500/20 rounded-lg p-2.5 break-all">
+              <p className="text-[11px] text-rose-200 font-mono bg-[#131417] border border-rose-500/20 rounded-lg p-2.5 break-all">
                 {errorMessage || 'Unknown error occurred while downloading file.'}
               </p>
             </div>
@@ -454,11 +454,11 @@ export const DownloadModal: React.FC<DownloadModalProps> = ({
           {(downloadStatus === 'idle' || downloadStatus === 'failed') && (
             <div className="space-y-1.5">
               <div className="flex items-center justify-between">
-                <label className="font-semibold text-slate-300 block">
+                <label className="font-semibold text-zinc-300 block">
                   Save Destination Path:
                 </label>
                 {isLoadingPath && (
-                  <span className="text-[10px] text-cyan-400 animate-pulse font-mono">Resolving path...</span>
+                  <span className="text-[10px] text-zinc-400 animate-pulse font-mono">Resolving path...</span>
                 )}
               </div>
               <div className="flex items-center space-x-2">
@@ -467,19 +467,19 @@ export const DownloadModal: React.FC<DownloadModalProps> = ({
                   value={destinationPath}
                   onChange={(e) => setDestinationPath(e.target.value)}
                   placeholder="Full file destination path (e.g. /home/user/Downloads/file.pdf)"
-                  className="flex-1 bg-slate-900 border border-slate-800 rounded-xl px-3.5 py-2.5 text-xs text-slate-200 font-mono focus:outline-none focus:border-emerald-500 placeholder-slate-600"
+                  className="flex-1 bg-[#18191d] border border-[#26282e] rounded-xl px-3.5 py-2.5 text-xs text-zinc-200 font-mono focus:outline-none focus:border-zinc-500 placeholder-zinc-600"
                 />
                 <button
                   type="button"
                   onClick={handleBrowse}
-                  className="flex items-center space-x-1.5 px-3.5 py-2.5 rounded-xl text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-emerald-400 border border-slate-700 transition-all shrink-0"
+                  className="flex items-center space-x-1.5 px-3.5 py-2.5 rounded-xl text-xs font-semibold bg-[#222428] hover:bg-[#2b2d32] text-zinc-200 border border-[#2e3035] transition-all shrink-0"
                   title="Browse folder via system dialog"
                 >
                   <FolderOpen className="w-3.5 h-3.5" />
                   <span>Browse...</span>
                 </button>
               </div>
-              <p className="text-[10px] text-slate-500">
+              <p className="text-[10px] text-zinc-500">
                 The file will be reconstructed directly on disk at this exact location.
               </p>
             </div>
@@ -487,24 +487,24 @@ export const DownloadModal: React.FC<DownloadModalProps> = ({
 
           {/* Preference Checkbox (Visible in idle state) */}
           {downloadStatus === 'idle' && (
-            <div className="pt-2 flex items-center justify-between border-t border-slate-800/60">
-              <label htmlFor="modalPromptCheckbox" className="text-[11px] text-slate-400 cursor-pointer flex items-center space-x-2">
+            <div className="pt-2 flex items-center justify-between border-t border-[#222429]">
+              <label htmlFor="modalPromptCheckbox" className="text-[11px] text-zinc-400 cursor-pointer flex items-center space-x-2">
                 <input
                   id="modalPromptCheckbox"
                   type="checkbox"
                   checked={promptSaveLocation}
                   onChange={(e) => handleTogglePromptSave(e.target.checked)}
-                  className="rounded border-slate-800 text-emerald-500 focus:ring-emerald-500/20 bg-slate-900 w-3.5 h-3.5 cursor-pointer"
+                  className="rounded border-[#26282e] text-zinc-200 focus:ring-0 bg-[#18191d] w-3.5 h-3.5 cursor-pointer"
                 />
                 <span>Always ask where to save each file</span>
               </label>
-              <span className="text-[10px] text-slate-600">Can be changed in Settings</span>
+              <span className="text-[10px] text-zinc-600">Can be changed in Settings</span>
             </div>
           )}
         </div>
 
         {/* Footer */}
-        <div className="flex items-center justify-between p-4 bg-slate-900/50 border-t border-slate-800">
+        <div className="flex items-center justify-between p-4 bg-[#18191d]/50 border-t border-[#222429]">
           {downloadStatus === 'downloading' ? (
             <>
               <button
@@ -522,7 +522,7 @@ export const DownloadModal: React.FC<DownloadModalProps> = ({
                   <button
                     type="button"
                     onClick={onNavigateToTransfers}
-                    className="flex items-center space-x-1.5 px-3.5 py-2 rounded-xl text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-slate-300 transition-all"
+                    className="flex items-center space-x-1.5 px-3.5 py-2 rounded-xl text-xs font-semibold bg-[#222428] hover:bg-[#2b2d32] text-zinc-300 transition-all border border-[#2e3035]"
                     title="Switch to Transfers tab"
                   >
                     <span>View in Queue</span>
@@ -532,7 +532,7 @@ export const DownloadModal: React.FC<DownloadModalProps> = ({
                 <button
                   type="button"
                   onClick={onClose}
-                  className="flex items-center space-x-1.5 px-4 py-2 rounded-xl text-xs font-semibold bg-cyan-600 hover:bg-cyan-500 text-white transition-all shadow-md shadow-cyan-600/30"
+                  className="flex items-center space-x-1.5 px-4 py-2 rounded-xl text-xs font-semibold bg-zinc-100 hover:bg-white text-zinc-950 transition-all shadow-sm border border-white/20"
                   title="Close modal and continue downloading in the background"
                 >
                   <Minimize2 className="w-3.5 h-3.5" />
@@ -545,7 +545,7 @@ export const DownloadModal: React.FC<DownloadModalProps> = ({
               <button
                 type="button"
                 onClick={onClose}
-                className="px-5 py-2 rounded-xl text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-slate-200 transition-all"
+                className="px-5 py-2 rounded-xl text-xs font-semibold bg-[#222428] hover:bg-[#2b2d32] text-zinc-200 border border-[#2e3035] transition-all"
               >
                 Done
               </button>
@@ -555,14 +555,14 @@ export const DownloadModal: React.FC<DownloadModalProps> = ({
               <button
                 type="button"
                 onClick={onClose}
-                className="px-4 py-2 rounded-xl text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-slate-300 transition-all"
+                className="px-4 py-2 rounded-xl text-xs font-semibold bg-[#18191d] hover:bg-[#222428] text-zinc-300 border border-[#26282e] transition-all"
               >
                 Close
               </button>
               <button
                 type="button"
                 onClick={handleStartDownload}
-                className="flex items-center space-x-1.5 px-5 py-2 rounded-xl text-xs font-semibold bg-emerald-600 hover:bg-emerald-500 text-white transition-all shadow-md shadow-emerald-600/30"
+                className="flex items-center space-x-1.5 px-5 py-2 rounded-xl text-xs font-semibold bg-zinc-100 hover:bg-white active:bg-zinc-200 text-zinc-950 transition-all shadow-sm border border-white/20"
               >
                 <RefreshCw className="w-3.5 h-3.5" />
                 <span>Retry Download</span>
@@ -573,7 +573,7 @@ export const DownloadModal: React.FC<DownloadModalProps> = ({
               <button
                 type="button"
                 onClick={onClose}
-                className="px-4 py-2 rounded-xl text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-slate-300 transition-all"
+                className="px-4 py-2 rounded-xl text-xs font-semibold bg-[#18191d] hover:bg-[#222428] text-zinc-300 border border-[#26282e] transition-all"
               >
                 Cancel
               </button>
@@ -581,7 +581,7 @@ export const DownloadModal: React.FC<DownloadModalProps> = ({
                 type="button"
                 onClick={handleStartDownload}
                 disabled={!destinationPath.trim()}
-                className="flex items-center space-x-2 px-5 py-2 rounded-xl text-xs font-semibold bg-emerald-600 hover:bg-emerald-500 text-white transition-all shadow-md shadow-emerald-600/30 disabled:opacity-50"
+                className="flex items-center space-x-2 px-5 py-2 rounded-xl text-xs font-semibold bg-zinc-100 hover:bg-white active:bg-zinc-200 text-zinc-950 transition-all shadow-sm border border-white/20 disabled:opacity-50"
               >
                 <Download className="w-3.5 h-3.5" />
                 <span>Start Download</span>

@@ -71,6 +71,7 @@ Files uploaded through MagDrive are:
 - **Transfer Queue Lifecycle & Auto-Cleanup**: Full state machine with Pause, Resume, Cancel, and Delete. Cancelling a transfer automatically removes any orphaned chunks uploaded to Google Drive.
 - **Transfer State Machine**: Resumable chunk transfers equipped with a Leaky Bucket Rate Limiter and Exponential Backoff with Jitter against Google API rate limits (HTTP 429).
 - **Optimized Direct-to-Disk Streaming Downloads**: Multi-stripe concurrent pipelining (`buffered(2)`), opportunistic early decoding (stops at 2/3 data shards, saving 33.3% bandwidth and eliminating tail latency), multi-core AES/Reed-Solomon CPU offloading (`spawn_blocking`), and direct-to-disk streaming with constant minimal RAM usage (~64 MB). Features an interactive in-app download popup modal, native OS GTK/Win32 file dialogs, configurable default download directory, collision-safe file naming, and one-click "Show in Folder" file manager reveal.
+- **Nordic Minimalist & Tactile Hardware Aesthetic**: Modern, low-fatigue design system crafted with deep obsidian charcoal canvas (`#0c0d0e`), elevated graphite surfaces (`#131417`/`#18191d`), crisp off-white primary actions, subtle 1px structural borders (`#222429`), and an ultra-lightweight GPU-composited procedural fine-grain texture (`.tactile-grain`) that delivers an organic tactile feel without network requests or runtime CPU repainting.
 - **Multi-Platform Support**: Cross-compiled binaries for Windows (`.msi` / `.exe`), macOS (`.dmg` / `.app`), and Linux (`.deb` / `.AppImage`).
 
 ---

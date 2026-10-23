@@ -43,6 +43,9 @@ import {
   SharedDriveItem,
 } from '../types';
 import { api } from '../services/api';
+import { ConfirmModal, ConfirmDialogOptions } from './ui/ConfirmModal';
+
+type SettingsTab = 'storage' | 'transfers' | 'backup' | 'advanced';
 
 interface SettingsViewProps {
   activeVault: VaultRecord | null;
@@ -113,6 +116,8 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   const [backupSuccess, setBackupSuccess] = useState<string | null>(null);
   const [isSavingJsonFile, setIsSavingJsonFile] = useState(false);
   const [isUploadingToCloud, setIsUploadingToCloud] = useState(false);
+  const [activeSettingsTab, setActiveSettingsTab] = useState<SettingsTab>('storage');
+  const [confirmDialog, setConfirmDialog] = useState<ConfirmDialogOptions | null>(null);
 
   const jsonFileInputRef = useRef<HTMLInputElement>(null);
 
@@ -387,24 +392,29 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     }
   };
 
-  const handleUploadVaultToDrive = async () => {
+  const handleUploadVaultToDrive = () => {
     if (!activeVault) return;
-    const confirmUpload = window.confirm(
-      'The vault.json file will be uploaded to .magdrive/ in your Google Drive. Anyone with access to your shared Drive folder can view the vault name and target layout (passphrase and files remain securely encrypted). Continue?'
-    );
-    if (!confirmUpload) return;
 
-    setIsUploadingToCloud(true);
-    setBackupError(null);
-    setBackupSuccess(null);
-    try {
-      const msg = await api.uploadVaultDescriptorToDrive(activeVault.id);
-      setBackupSuccess(msg);
-    } catch (err: any) {
-      setBackupError(typeof err === 'string' ? err : 'Failed to upload vault.json to Google Drive.');
-    } finally {
-      setIsUploadingToCloud(false);
-    }
+    setConfirmDialog({
+      title: 'Upload Cloud Descriptor',
+      message:
+        'The vault.json file will be uploaded to .magdrive/ in your Google Drive. Anyone with access to your shared Drive folder can view the vault name and target layout (passphrase and files remain securely encrypted). Continue?',
+      confirmText: 'Upload Descriptor',
+      variant: 'warning',
+      onConfirm: async () => {
+        setIsUploadingToCloud(true);
+        setBackupError(null);
+        setBackupSuccess(null);
+        try {
+          const msg = await api.uploadVaultDescriptorToDrive(activeVault.id);
+          setBackupSuccess(msg);
+        } catch (err: any) {
+          setBackupError(typeof err === 'string' ? err : 'Failed to upload vault.json to Google Drive.');
+        } finally {
+          setIsUploadingToCloud(false);
+        }
+      },
+    });
   };
 
   const handleCopyBackupToken = () => {
@@ -617,13 +627,12 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   };
 
   return (
-    <div className="flex-1 bg-slate-900 overflow-y-auto p-8">
+    <div className="flex-1 bg-[#0c0d0e] overflow-y-auto p-8">
       <div className="max-w-4xl mx-auto space-y-8">
         <div>
-          <h2 className="text-xl font-bold text-slate-100">System Settings & Credentials</h2>
-          <p className="text-xs text-slate-400 mt-1">
-            Configure Google Cloud Platform credentials, authenticate your Google account, and manage
-            distributed storage targets.
+          <h2 className="text-xl font-bold text-zinc-100">Settings</h2>
+          <p className="text-xs text-zinc-400 mt-1">
+            Manage connected accounts, storage drives, downloads, and backups.
           </p>
         </div>
 
@@ -644,16 +653,69 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
           </div>
         )}
 
-        {/* Section 1: GCP Credentials */}
-        <div className="bg-slate-950 border border-slate-800 rounded-2xl p-6 space-y-4">
-          <div className="flex items-center justify-between border-b border-slate-800/80 pb-3">
+        {/* Sub-Tab Navigation Bar */}
+        <div className="flex border-b border-[#222429] bg-[#131417] p-1 rounded-xl text-xs space-x-1 shadow-sm">
+          <button
+            type="button"
+            onClick={() => setActiveSettingsTab('storage')}
+            className={`flex-1 flex items-center justify-center space-x-2 py-2.5 rounded-lg font-semibold transition-all ${
+              activeSettingsTab === 'storage'
+                ? 'bg-zinc-800 text-zinc-100 shadow-sm border border-zinc-700/80'
+                : 'text-zinc-400 hover:text-zinc-200 hover:bg-[#18191d]'
+            }`}
+          >
+            <HardDrive className="w-4 h-4" />
+            <span>Accounts & Storage</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => setActiveSettingsTab('transfers')}
+            className={`flex-1 flex items-center justify-center space-x-2 py-2.5 rounded-lg font-semibold transition-all ${
+              activeSettingsTab === 'transfers'
+                ? 'bg-zinc-800 text-zinc-100 shadow-sm border border-zinc-700/80'
+                : 'text-zinc-400 hover:text-zinc-200 hover:bg-[#18191d]'
+            }`}
+          >
+            <FolderDown className="w-4 h-4" />
+            <span>Transfers & Download</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => setActiveSettingsTab('backup')}
+            className={`flex-1 flex items-center justify-center space-x-2 py-2.5 rounded-lg font-semibold transition-all ${
+              activeSettingsTab === 'backup'
+                ? 'bg-zinc-800 text-zinc-100 shadow-sm border border-zinc-700/80'
+                : 'text-zinc-400 hover:text-zinc-200 hover:bg-[#18191d]'
+            }`}
+          >
+            <ShieldCheck className="w-4 h-4" />
+            <span>Vault Backup & Recovery</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => setActiveSettingsTab('advanced')}
+            className={`flex-1 flex items-center justify-center space-x-2 py-2.5 rounded-lg font-semibold transition-all ${
+              activeSettingsTab === 'advanced'
+                ? 'bg-zinc-800 text-zinc-100 shadow-sm border border-zinc-700/80'
+                : 'text-zinc-400 hover:text-zinc-200 hover:bg-[#18191d]'
+            }`}
+          >
+            <Key className="w-4 h-4" />
+            <span>API & Network</span>
+          </button>
+        </div>
+
+        {/* Tab 4: API & Swarm Network (Part 1: GCP Credentials) */}
+        {activeSettingsTab === 'advanced' && (
+        <div className="bg-[#131417] border border-[#222429] rounded-2xl p-6 space-y-4">
+          <div className="flex items-center justify-between border-b border-[#222429] pb-3">
             <div className="flex items-center space-x-2">
-              <Key className="w-5 h-5 text-cyan-400" />
-              <h3 className="text-sm font-bold text-slate-100">GCP Credentials (OAuth 2.0 Client)</h3>
+              <Key className="w-5 h-5 text-zinc-300" />
+              <h3 className="text-sm font-bold text-zinc-100">GCP Credentials (OAuth 2.0 Client)</h3>
             </div>
             <button
               onClick={() => jsonFileInputRef.current?.click()}
-              className="flex items-center space-x-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-slate-900 hover:bg-slate-800 text-cyan-400 border border-slate-700 transition-all"
+              className="flex items-center space-x-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-[#18191d] hover:bg-[#222428] text-zinc-200 border border-[#26282e] transition-all"
             >
               <FileCode className="w-3.5 h-3.5" />
               <span>Import client_secret.json</span>
@@ -669,7 +731,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
 
           <form onSubmit={handleSaveGcp} className="space-y-4">
             <div>
-              <label className="text-xs font-semibold text-slate-400 block mb-1">
+              <label className="text-xs font-semibold text-zinc-400 block mb-1">
                 OAuth Client ID
               </label>
               <input
@@ -677,12 +739,12 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                 placeholder="e.g., 123456789-abcdefg.apps.googleusercontent.com"
                 value={clientId}
                 onChange={(e) => setClientId(e.target.value)}
-                className="w-full bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 text-xs text-slate-200 placeholder-slate-600 focus:outline-none focus:border-cyan-500 font-mono"
+                className="w-full bg-[#18191d] border border-[#26282e] rounded-lg px-3 py-2 text-xs text-zinc-200 placeholder-zinc-500 focus:outline-none focus:border-zinc-500 font-mono"
               />
             </div>
 
             <div>
-              <label className="text-xs font-semibold text-slate-400 block mb-1">
+              <label className="text-xs font-semibold text-zinc-400 block mb-1">
                 OAuth Client Secret (Optional for Desktop PKCE)
               </label>
               <input
@@ -690,29 +752,31 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                 placeholder="GOCSPX-..."
                 value={clientSecret}
                 onChange={(e) => setClientSecret(e.target.value)}
-                className="w-full bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 text-xs text-slate-200 placeholder-slate-600 focus:outline-none focus:border-cyan-500 font-mono"
+                className="w-full bg-[#18191d] border border-[#26282e] rounded-lg px-3 py-2 text-xs text-zinc-200 placeholder-zinc-500 focus:outline-none focus:border-zinc-500 font-mono"
               />
             </div>
 
             <button
               type="submit"
               disabled={isSavingGcp || !clientId.trim()}
-              className="px-4 py-2 rounded-lg text-xs font-semibold bg-cyan-600 hover:bg-cyan-500 text-white transition-all disabled:opacity-50"
+              className="px-4 py-2 rounded-xl text-xs font-semibold bg-zinc-100 hover:bg-white active:bg-zinc-200 text-zinc-950 transition-all shadow-sm border border-white/20 disabled:opacity-50"
             >
               {isSavingGcp ? 'Saving...' : 'Save GCP Credentials'}
             </button>
           </form>
         </div>
+        )}
 
-        {/* Section 2: Google Accounts & Multi-Tenant Storage Pool */}
-        <div className="bg-slate-950 border border-slate-800 rounded-2xl p-6 space-y-5">
-          <div className="flex items-center justify-between border-b border-slate-800/80 pb-3">
+        {/* Tab 1: Accounts & Storage (Part 1: Google Accounts Pool) */}
+        {activeSettingsTab === 'storage' && (
+          <div className="bg-[#131417] border border-[#222429] rounded-2xl p-6 space-y-5">
+          <div className="flex items-center justify-between border-b border-[#222429] pb-3">
             <div className="flex items-center space-x-2">
               <Users className="w-5 h-5 text-emerald-400" />
               <div>
-                <h3 className="text-sm font-bold text-slate-100">Google Accounts & Multi-Tenant Storage Pool</h3>
-                <p className="text-[11px] text-slate-400 mt-0.5">
-                  Connect multiple Google accounts. Each account uploads its designated shards independently, pooling 15 GB quotas together without penalizing a single account.
+                <h3 className="text-sm font-bold text-zinc-100">Connected Google Accounts</h3>
+                <p className="text-[11px] text-zinc-400 mt-0.5">
+                  Connect one or more Google accounts. Quotas are pooled together automatically for multi-drive redundancy.
                 </p>
               </div>
             </div>
@@ -722,9 +786,9 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                 onClick={fetchGoogleAccounts}
                 disabled={isLoadingAccounts}
                 title="Refresh accounts & storage quotas"
-                className="flex items-center space-x-1.5 px-3 py-2 rounded-lg text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-cyan-400 border border-slate-700 transition-all disabled:opacity-50"
+                className="flex items-center space-x-1.5 px-3 py-2 rounded-xl text-xs font-semibold bg-[#18191d] hover:bg-[#222428] text-zinc-300 hover:text-zinc-100 border border-[#26282e] transition-all disabled:opacity-50"
               >
-                <RefreshCw className={`w-3.5 h-3.5 ${isLoadingAccounts ? 'animate-spin text-cyan-400' : ''}`} />
+                <RefreshCw className={`w-3.5 h-3.5 ${isLoadingAccounts ? 'animate-spin text-zinc-300' : ''}`} />
                 <span>{isLoadingAccounts ? 'Refreshing...' : 'Refresh'}</span>
               </button>
               {googleAccounts.length > 0 && (
@@ -732,7 +796,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   type="button"
                   onClick={handleLogout}
                   title="Disconnect all accounts"
-                  className="px-3 py-2 rounded-lg text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-rose-400 border border-slate-700 transition-all"
+                  className="px-3 py-2 rounded-xl text-xs font-semibold bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/20 transition-all"
                 >
                   Disconnect All
                 </button>
@@ -740,35 +804,35 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               <button
                 onClick={handleConnectGoogle}
                 disabled={!clientId.trim()}
-                className="flex items-center space-x-1.5 px-3.5 py-2 rounded-lg text-xs font-semibold bg-cyan-600 hover:bg-cyan-500 text-white transition-all shadow-md shadow-cyan-600/30 disabled:opacity-50"
+                className="flex items-center space-x-1.5 px-3.5 py-2 rounded-xl text-xs font-semibold bg-zinc-100 hover:bg-white active:bg-zinc-200 text-zinc-950 transition-all shadow-sm border border-white/20 disabled:opacity-50"
               >
                 <Plus className="w-3.5 h-3.5" />
-                <span>+ Connect Google Account</span>
+                <span>Connect Google Account</span>
               </button>
             </div>
           </div>
 
           {/* Manual Link Fallback */}
           {authUrlManual && (
-            <div className="p-4 rounded-xl bg-slate-900 border border-cyan-500/30 space-y-3">
+            <div className="p-4 rounded-xl bg-[#18191d] border border-[#26282e] space-y-3">
               <div className="flex items-start justify-between">
                 <div>
-                  <h4 className="text-xs font-bold text-cyan-300">Browser Did Not Open Automatically?</h4>
-                  <p className="text-[11px] text-slate-400 mt-0.5">
+                  <h4 className="text-xs font-bold text-zinc-200">Browser Did Not Open Automatically?</h4>
+                  <p className="text-[11px] text-zinc-400 mt-0.5">
                     Click the button below to launch the authorization window, or copy the link directly into your browser.
                   </p>
                 </div>
                 <div className="flex items-center space-x-2">
                   <button
                     onClick={() => openUrl(authUrlManual)}
-                    className="flex items-center space-x-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-cyan-600/20 text-cyan-300 hover:bg-cyan-600/30 border border-cyan-500/40 transition-all"
+                    className="flex items-center space-x-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-zinc-800 text-zinc-200 hover:bg-zinc-700 border border-zinc-700 transition-all"
                   >
                     <ExternalLink className="w-3.5 h-3.5" />
                     <span>Open in Browser</span>
                   </button>
                   <button
                     onClick={handleCopyAuthUrl}
-                    className="flex items-center space-x-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 transition-all"
+                    className="flex items-center space-x-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-[#222428] hover:bg-[#2b2d32] text-zinc-200 border border-[#2e3035] transition-all"
                   >
                     {copiedAuthUrl ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
                     <span>{copiedAuthUrl ? 'Copied!' : 'Copy URL'}</span>
@@ -779,27 +843,27 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                 type="text"
                 readOnly
                 value={authUrlManual}
-                className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-1.5 text-[11px] text-slate-400 font-mono select-all focus:outline-none"
+                className="w-full bg-[#0c0d0e] border border-[#26282e] rounded-lg px-3 py-1.5 text-[11px] text-zinc-400 font-mono select-all focus:outline-none"
               />
             </div>
           )}
 
           {/* Connected Accounts List */}
           {googleAccounts.length === 0 ? (
-            <div className="text-center py-8 border border-dashed border-slate-800 rounded-xl space-y-3">
-              <div className="w-12 h-12 rounded-full bg-slate-900 flex items-center justify-center mx-auto text-slate-500">
+            <div className="text-center py-8 border border-dashed border-[#26282e] rounded-xl space-y-3">
+              <div className="w-12 h-12 rounded-full bg-[#18191d] flex items-center justify-center mx-auto text-zinc-500">
                 <Users className="w-6 h-6" />
               </div>
               <div>
-                <p className="text-xs font-semibold text-slate-300">No Google Accounts Connected Yet</p>
-                <p className="text-[11px] text-slate-500 max-w-sm mx-auto mt-0.5">
+                <p className="text-xs font-semibold text-zinc-300">No Google Accounts Connected Yet</p>
+                <p className="text-[11px] text-zinc-500 max-w-sm mx-auto mt-0.5">
                   Authenticate your first Google account using OAuth 2.0 PKCE. MagDrive will automatically create a dedicated <strong>"MagDrive Storage"</strong> folder on each account.
                 </p>
               </div>
               <button
                 onClick={handleConnectGoogle}
                 disabled={!clientId.trim()}
-                className="inline-flex items-center space-x-1.5 px-4 py-2 rounded-lg text-xs font-semibold bg-cyan-600 hover:bg-cyan-500 text-white transition-all shadow-md shadow-cyan-600/30 disabled:opacity-50"
+                className="inline-flex items-center space-x-1.5 px-4 py-2 rounded-xl text-xs font-semibold bg-zinc-100 hover:bg-white text-zinc-950 transition-all shadow-sm border border-white/20 disabled:opacity-50"
               >
                 <Plus className="w-3.5 h-3.5" />
                 <span>Connect Account with Google</span>
@@ -818,22 +882,22 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                 return (
                   <div
                     key={acc.email}
-                    className="bg-slate-900 border border-slate-800 rounded-xl p-4 space-y-3 hover:border-slate-700/80 transition-all"
+                    className="bg-[#18191d] border border-[#26282e] rounded-xl p-4 space-y-3 hover:border-[#353840] transition-all"
                   >
                     {/* Account Header */}
                     <div className="flex items-start justify-between">
                       <div className="flex items-center space-x-3">
-                        <div className="w-9 h-9 rounded-full bg-gradient-to-br from-cyan-600 to-indigo-600 text-white flex items-center justify-center font-bold text-sm shadow-md shadow-cyan-500/20">
+                        <div className="w-9 h-9 rounded-full bg-zinc-800 text-zinc-100 border border-zinc-700/60 flex items-center justify-center font-bold text-sm">
                           {acc.displayName.charAt(0).toUpperCase()}
                         </div>
                         <div>
                           <div className="flex items-center space-x-2">
-                            <span className="text-xs font-bold text-white">{acc.displayName}</span>
+                            <span className="text-xs font-bold text-zinc-100">{acc.displayName}</span>
                             <span className="text-[10px] text-emerald-400 font-mono bg-emerald-950/80 border border-emerald-800/60 px-1.5 py-0.2 rounded">
                               Connected
                             </span>
                           </div>
-                          <span className="text-[11px] text-slate-400 font-mono block">
+                          <span className="text-[11px] text-zinc-400 font-mono block">
                             {acc.email}
                           </span>
                         </div>
@@ -843,7 +907,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                         <button
                           onClick={() => handleRemoveAccount(acc.email)}
                           title="Disconnect account"
-                          className="px-2.5 py-1 text-[11px] font-semibold text-rose-400 hover:bg-rose-950/30 border border-slate-800 hover:border-rose-900/50 rounded-lg transition-colors"
+                          className="px-2.5 py-1 text-[11px] font-semibold text-rose-400 hover:bg-rose-950/30 border border-[#26282e] hover:border-rose-900/50 rounded-lg transition-colors"
                         >
                           Disconnect
                         </button>
@@ -851,21 +915,21 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                     </div>
 
                     {/* Storage Quota Progress */}
-                    <div className="bg-slate-950/70 border border-slate-800/80 rounded-lg p-3 space-y-2">
+                    <div className="bg-[#131417] border border-[#222429] rounded-lg p-3 space-y-2">
                       <div className="flex items-center justify-between text-xs">
                         {acc.isUnlimited ? (
                           <>
-                            <span className="text-slate-400">Storage Capacity:</span>
+                            <span className="text-zinc-400">Storage Capacity:</span>
                             <span className="font-semibold text-emerald-400">
                               Unlimited Workspace Pooled ({formatBytes(acc.usageBytes)} used)
                             </span>
                           </>
                         ) : (
                           <>
-                            <span className="text-slate-300 font-medium">
+                            <span className="text-zinc-300 font-medium">
                               {formatBytes(acc.usageBytes)} of {formatBytes(acc.limitBytes || 0)} used
                               {acc.usagePercentage !== undefined && (
-                                <span className="text-slate-400 ml-1 font-mono">
+                                <span className="text-zinc-400 ml-1 font-mono">
                                   ({acc.usagePercentage.toFixed(1)}%)
                                 </span>
                               )}
@@ -878,14 +942,14 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                       </div>
 
                       {!acc.isUnlimited && (
-                        <div className="w-full bg-slate-900 rounded-full h-2 overflow-hidden border border-slate-800 flex">
+                        <div className="w-full bg-[#18191d] rounded-full h-2 overflow-hidden border border-[#222429] flex">
                           <div
                             className={`h-full transition-all duration-500 rounded-full ${
                               (acc.usagePercentage || 0) > 90
-                                ? 'bg-rose-500 shadow-sm shadow-rose-500/50'
+                                ? 'bg-rose-500'
                                 : (acc.usagePercentage || 0) > 75
-                                ? 'bg-amber-400 shadow-sm shadow-amber-400/50'
-                                : 'bg-gradient-to-r from-cyan-500 to-emerald-400'
+                                ? 'bg-amber-400'
+                                : 'bg-zinc-100'
                             }`}
                             style={{ width: `${Math.min(acc.usagePercentage || 0, 100)}%` }}
                           />
@@ -893,17 +957,17 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                       )}
 
                       <div className="grid grid-cols-3 gap-2 pt-1 text-[10px]">
-                        <div className="bg-slate-900/60 rounded p-1 text-center">
-                          <span className="text-slate-500 block">Drive Files</span>
-                          <span className="text-slate-300 font-mono">{formatBytes(acc.usageInDriveBytes)}</span>
+                        <div className="bg-[#18191d] rounded p-1 text-center border border-[#222429]">
+                          <span className="text-zinc-500 block">Drive Files</span>
+                          <span className="text-zinc-300 font-mono">{formatBytes(acc.usageInDriveBytes)}</span>
                         </div>
-                        <div className="bg-slate-900/60 rounded p-1 text-center">
-                          <span className="text-slate-500 block">Drive Trash</span>
-                          <span className="text-slate-300 font-mono">{formatBytes(acc.usageInTrashBytes)}</span>
+                        <div className="bg-[#18191d] rounded p-1 text-center border border-[#222429]">
+                          <span className="text-zinc-500 block">Drive Trash</span>
+                          <span className="text-zinc-300 font-mono">{formatBytes(acc.usageInTrashBytes)}</span>
                         </div>
-                        <div className="bg-slate-900/60 rounded p-1 text-center">
-                          <span className="text-slate-500 block">Mail/Photos</span>
-                          <span className="text-slate-300 font-mono">
+                        <div className="bg-[#18191d] rounded p-1 text-center border border-[#222429]">
+                          <span className="text-zinc-500 block">Mail/Photos</span>
+                          <span className="text-zinc-300 font-mono">
                             {formatBytes(Math.max(0, acc.usageBytes - acc.usageInDriveBytes))}
                           </span>
                         </div>
@@ -911,13 +975,13 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                     </div>
 
                     {/* Auto Folder & 1-Click Vault Actions */}
-                    <div className="pt-1 flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-t border-slate-800/60">
-                      <div className="flex items-center space-x-1.5 text-[11px] text-slate-400">
-                        <Folder className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
+                    <div className="pt-1 flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-t border-[#222429]">
+                      <div className="flex items-center space-x-1.5 text-[11px] text-zinc-400">
+                        <Folder className="w-3.5 h-3.5 text-zinc-300 shrink-0" />
                         <span>
-                          Dedicated Folder: <strong className="text-slate-200">MagDrive Storage</strong>
+                          Dedicated Folder: <strong className="text-zinc-200">MagDrive Storage</strong>
                           {acc.rootFolderId && (
-                            <span className="text-[10px] font-mono text-slate-500 ml-1">
+                            <span className="text-[10px] font-mono text-zinc-500 ml-1">
                               ({acc.rootFolderId})
                             </span>
                           )}
@@ -931,8 +995,8 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                           disabled={!activeVault || isTargetAdded}
                           className={`flex items-center space-x-1 px-2.5 py-1.5 rounded-lg text-xs font-semibold transition-all ${
                             isTargetAdded
-                              ? 'bg-slate-800/80 text-emerald-400 border border-emerald-900/40 cursor-default'
-                              : 'bg-cyan-600/20 hover:bg-cyan-600/30 text-cyan-300 border border-cyan-500/40 hover:border-cyan-500/60'
+                              ? 'bg-zinc-800 text-emerald-400 border border-emerald-900/40 cursor-default'
+                              : 'bg-zinc-800 hover:bg-zinc-700 text-zinc-200 border border-zinc-700'
                           }`}
                         >
                           {isTargetAdded ? (
@@ -1014,8 +1078,10 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
             </div>
           )}
         </div>
+        )}
 
-        {/* Section 2: Download Preferences */}
+        {/* Tab 2: Transfers & Download Preferences */}
+        {activeSettingsTab === 'transfers' && (
         <div className="bg-slate-950 border border-slate-800 rounded-2xl p-6 space-y-5">
           <div className="flex items-center justify-between border-b border-slate-800/80 pb-3">
             <div className="flex items-center space-x-2">
@@ -1088,16 +1154,18 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
             </div>
           </div>
         </div>
+        )}
 
-        {/* Section 3: Multi-Tracker & Swarm Mirroring */}
+        {/* Tab 4: API & Swarm Network (Part 2: Multi-Tracker) */}
+        {activeSettingsTab === 'advanced' && (
         <div className="bg-slate-950 border border-slate-800 rounded-2xl p-6 space-y-5">
           <div className="flex items-center justify-between border-b border-slate-800/80 pb-3">
             <div className="flex items-center space-x-2">
               <Server className="w-5 h-5 text-indigo-400" />
               <div>
-                <h3 className="text-sm font-bold text-slate-100">Multi-Tracker & Swarm Mirroring</h3>
+                <h3 className="text-sm font-bold text-slate-100">P2P Swarm & Trackers</h3>
                 <p className="text-[11px] text-slate-500">
-                  Serverless tracker list for peer discovery (Google Drive mirrors) and swarm coordination.
+                  List of trackers for peer discovery and mirror swarm coordination.
                 </p>
               </div>
             </div>
@@ -1139,12 +1207,12 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                 placeholder="https://your-tracker.vercel.app/api"
                 value={newTrackerUrl}
                 onChange={(e) => setNewTrackerUrl(e.target.value)}
-                className="flex-1 bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 text-xs text-slate-200 placeholder-slate-600 focus:outline-none focus:border-cyan-500 font-mono"
+                className="flex-1 bg-[#18191d] border border-[#26282e] rounded-lg px-3 py-2 text-xs text-zinc-200 placeholder-zinc-500 focus:outline-none focus:border-zinc-500 font-mono"
               />
               <button
                 onClick={handleAddTracker}
                 disabled={!newTrackerUrl.trim()}
-                className="flex items-center space-x-1.5 px-3 py-2 rounded-lg text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-cyan-400 border border-slate-700 transition-all disabled:opacity-50"
+                className="flex items-center space-x-1.5 px-3.5 py-2 rounded-xl text-xs font-semibold bg-[#18191d] hover:bg-[#222428] text-zinc-200 border border-[#26282e] transition-all disabled:opacity-50"
               >
                 <Plus className="w-3.5 h-3.5" />
                 <span>Add Tracker</span>
@@ -1152,12 +1220,12 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
             </div>
 
             {/* Default Opt-in Seeding Toggle */}
-            <div className="pt-3 border-t border-slate-800/60 flex items-start justify-between">
+            <div className="pt-3 border-t border-[#222429] flex items-start justify-between">
               <div className="space-y-0.5">
-                <label htmlFor="defaultSeedingCheckbox" className="text-xs font-semibold text-slate-200 cursor-pointer">
+                <label htmlFor="defaultSeedingCheckbox" className="text-xs font-semibold text-zinc-200 cursor-pointer">
                   Automatically enable public mirror when copying (Default Opt-in Seeding)
                 </label>
-                <p className="text-[11px] text-slate-500">
+                <p className="text-[11px] text-zinc-500">
                   When enabled, copied files to your Google Drive will automatically be set to Public Viewer and announced to trackers to help other users.
                 </p>
               </div>
@@ -1169,7 +1237,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   onChange={(e) => setDefaultSeeding(e.target.checked)}
                   className="sr-only peer"
                 />
-                <div className="w-9 h-5 bg-slate-800 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-indigo-600"></div>
+                <div className="w-9 h-5 bg-[#26282e] peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-zinc-100"></div>
               </label>
             </div>
 
@@ -1177,93 +1245,94 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               <button
                 onClick={handleSaveTrackers}
                 disabled={isSavingTracker}
-                className="px-5 py-2 rounded-lg text-xs font-semibold bg-indigo-600 hover:bg-indigo-500 text-white transition-all shadow-md shadow-indigo-600/30 disabled:opacity-50"
+                className="px-5 py-2.5 rounded-xl text-xs font-semibold bg-zinc-100 hover:bg-white active:bg-zinc-200 text-zinc-950 transition-all shadow-sm border border-white/20 disabled:opacity-50"
               >
                 {isSavingTracker ? 'Saving...' : 'Save Tracker Settings'}
               </button>
             </div>
           </div>
         </div>
+        )}
 
-        {/* Section 4: Vault Targets */}
-        {activeVault && (
-          <div className="bg-slate-950 border border-slate-800 rounded-2xl p-6 space-y-6">
-            <div className="flex items-center justify-between border-b border-slate-800/80 pb-3">
+        {/* Tab 1: Accounts & Storage (Part 2: Active Vault Targets) */}
+        {activeSettingsTab === 'storage' && activeVault && (
+          <div className="bg-[#131417] border border-[#222429] rounded-2xl p-6 space-y-6">
+            <div className="flex items-center justify-between border-b border-[#222429] pb-3">
               <div className="flex items-center space-x-2">
-                <HardDrive className="w-5 h-5 text-sky-400" />
-                <h3 className="text-sm font-bold text-slate-100">
-                  Vault Storage Targets ({activeVault.name})
+                <HardDrive className="w-5 h-5 text-zinc-300" />
+                <h3 className="text-sm font-bold text-zinc-100">
+                  Storage Targets ({activeVault.name})
                 </h3>
               </div>
-              <span className="text-xs text-slate-400 font-mono">
+              <span className="text-xs text-zinc-400 font-mono">
                 {targets.length} Targets Configured
               </span>
             </div>
 
             {/* Adaptive Erasure Scheme Info Banner */}
             {erasureInfo && (
-              <div className="bg-slate-900/90 border border-cyan-500/30 rounded-xl p-4 space-y-3">
+              <div className="bg-[#18191d] border border-[#26282e] rounded-xl p-4 space-y-3">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center space-x-2">
-                    <ShieldCheck className="w-4 h-4 text-cyan-400" />
-                    <span className="text-xs font-bold text-slate-100">
-                      Adaptive Erasure Coding Scheme
+                    <ShieldCheck className="w-4 h-4 text-zinc-300" />
+                    <span className="text-xs font-bold text-zinc-100">
+                      Drive Redundancy & Protection
                     </span>
                   </div>
-                  <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-cyan-950 text-cyan-300 border border-cyan-800">
+                  <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-zinc-800 text-zinc-200 border border-zinc-700">
                     Auto-Configured
                   </span>
                 </div>
 
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-center">
-                  <div className="bg-slate-950/80 border border-slate-800/80 rounded-lg p-2.5">
-                    <span className="text-[10px] text-slate-400 block uppercase tracking-wider font-semibold">Active Formula</span>
-                    <span className="text-sm font-bold text-cyan-400">
+                  <div className="bg-[#131417] border border-[#222429] rounded-lg p-2.5">
+                    <span className="text-[10px] text-zinc-400 block uppercase tracking-wider font-semibold">Formula</span>
+                    <span className="text-sm font-bold text-zinc-100">
                       {erasureInfo.data_shards} + {erasureInfo.parity_shards}
                     </span>
-                    <span className="text-[10px] text-slate-500 block mt-0.5">
+                    <span className="text-[10px] text-zinc-500 block mt-0.5">
                       ({erasureInfo.data_shards} Data, {erasureInfo.parity_shards} Parity)
                     </span>
                   </div>
 
-                  <div className="bg-slate-950/80 border border-slate-800/80 rounded-lg p-2.5">
-                    <span className="text-[10px] text-slate-400 block uppercase tracking-wider font-semibold">Fault Tolerance</span>
+                  <div className="bg-[#131417] border border-[#222429] rounded-lg p-2.5">
+                    <span className="text-[10px] text-zinc-400 block uppercase tracking-wider font-semibold">Fault Tolerance</span>
                     <span className="text-sm font-bold text-emerald-400">
-                      {erasureInfo.fault_tolerance} {erasureInfo.fault_tolerance === 1 ? 'Target' : 'Targets'}
+                      {erasureInfo.fault_tolerance > 0 ? `Tolerates ${erasureInfo.fault_tolerance} drive failure${erasureInfo.fault_tolerance > 1 ? 's' : ''}` : 'No redundancy'}
                     </span>
-                    <span className="text-[10px] text-slate-500 block mt-0.5">
-                      {erasureInfo.fault_tolerance > 0 ? 'Survives total loss' : 'No redundancy'}
+                    <span className="text-[10px] text-zinc-500 block mt-0.5">
+                      {erasureInfo.fault_tolerance > 0 ? 'Survives drive loss' : 'Single drive only'}
                     </span>
                   </div>
 
-                  <div className="bg-slate-950/80 border border-slate-800/80 rounded-lg p-2.5">
-                    <span className="text-[10px] text-slate-400 block uppercase tracking-wider font-semibold">Distribution</span>
-                    <span className="text-sm font-bold text-amber-400">
+                  <div className="bg-[#131417] border border-[#222429] rounded-lg p-2.5">
+                    <span className="text-[10px] text-zinc-400 block uppercase tracking-wider font-semibold">Distribution</span>
+                    <span className="text-sm font-bold text-zinc-100">
                       1 Shard / Target
                     </span>
-                    <span className="text-[10px] text-slate-500 block mt-0.5">
+                    <span className="text-[10px] text-zinc-500 block mt-0.5">
                       Strict non-colocation
                     </span>
                   </div>
 
-                  <div className="bg-slate-950/80 border border-slate-800/80 rounded-lg p-2.5">
-                    <span className="text-[10px] text-slate-400 block uppercase tracking-wider font-semibold">Storage Overhead</span>
-                    <span className="text-sm font-bold text-purple-400">
+                  <div className="bg-[#131417] border border-[#222429] rounded-lg p-2.5">
+                    <span className="text-[10px] text-zinc-400 block uppercase tracking-wider font-semibold">Storage Overhead</span>
+                    <span className="text-sm font-bold text-zinc-300">
                       +{erasureInfo.overhead_percent}%
                     </span>
-                    <span className="text-[10px] text-slate-500 block mt-0.5">
+                    <span className="text-[10px] text-zinc-500 block mt-0.5">
                       Cloud quota usage
                     </span>
                   </div>
                 </div>
 
-                <div className="flex items-start space-x-2 text-[11px] text-slate-400 bg-slate-950/50 rounded-lg p-2 border border-slate-800/50">
-                  <Info className="w-4 h-4 text-cyan-400 shrink-0 mt-0.5" />
+                <div className="flex items-start space-x-2 text-[11px] text-zinc-400 bg-[#131417] rounded-lg p-2 border border-[#222429]">
+                  <Info className="w-4 h-4 text-zinc-400 shrink-0 mt-0.5" />
                   <span>
                     {erasureInfo.fault_tolerance > 0 ? (
                       <>
                         Each file stripe is partitioned across all connected storage targets. If up to{' '}
-                        <strong className="text-slate-200">{erasureInfo.fault_tolerance} Google account(s)</strong> are suspended or deleted, MagDrive will still reconstruct all files with zero data loss.
+                        <strong className="text-zinc-200">{erasureInfo.fault_tolerance} Google account(s)</strong> are suspended or deleted, MagDrive will still reconstruct all files with zero data loss.
                       </>
                     ) : (
                       <>
@@ -1280,14 +1349,14 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               {targets.map((t, idx) => (
                 <div
                   key={idx}
-                  className="flex items-center justify-between bg-slate-900 border border-slate-800 rounded-lg p-3 text-xs"
+                  className="flex items-center justify-between bg-[#18191d] border border-[#26282e] rounded-lg p-3 text-xs"
                 >
                   <div className="flex items-center space-x-3">
-                    <span className="w-5 h-5 rounded-full bg-slate-800 text-slate-400 flex items-center justify-center font-bold text-[10px]">
+                    <span className="w-5 h-5 rounded-full bg-[#131417] text-zinc-400 flex items-center justify-center font-bold text-[10px] border border-[#222429]">
                       {idx + 1}
                     </span>
                     <div>
-                      <div className="font-semibold text-slate-200 flex items-center space-x-2">
+                      <div className="font-semibold text-zinc-200 flex items-center space-x-2">
                         <span>{t.label}</span>
                         {t.account_email && (
                           <span className="text-[10px] font-mono bg-emerald-950/80 text-emerald-400 border border-emerald-800/60 px-1.5 py-0.2 rounded">
@@ -1295,10 +1364,10 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                           </span>
                         )}
                       </div>
-                      <div className="text-[10px] text-slate-500 font-mono flex items-center space-x-1.5 flex-wrap mt-0.5">
+                      <div className="text-[10px] text-zinc-500 font-mono flex items-center space-x-1.5 flex-wrap mt-0.5">
                         <span>{t.target_type === 'SharedDrive' ? 'Google Workspace Shared Drive' : 'Personal Shared Folder'} • ID: {t.target_id}</span>
                         {targetUsageMap[t.target_id] && (
-                          <span className="text-cyan-400 font-medium bg-slate-950/80 px-1.5 py-0.5 rounded border border-slate-800">
+                          <span className="text-zinc-300 font-medium bg-[#131417] px-1.5 py-0.5 rounded border border-[#222429]">
                             {targetUsageMap[t.target_id].chunkCount} shards ({formatBytes(targetUsageMap[t.target_id].totalBytes)})
                           </span>
                         )}
@@ -1309,15 +1378,15 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                     <button
                       onClick={() => handleOpenMigration(t)}
                       title="Migrate or Evacuate Shards"
-                      className="flex items-center space-x-1 px-2.5 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-cyan-400 transition-colors text-[11px] font-medium"
+                      className="flex items-center space-x-1 px-2.5 py-1 rounded bg-[#222428] hover:bg-[#2b2d32] text-zinc-300 hover:text-white transition-colors text-[11px] font-medium border border-[#2e3035]"
                     >
-                      <ArrowLeftRight className="w-3.5 h-3.5 text-cyan-400" />
+                      <ArrowLeftRight className="w-3.5 h-3.5 text-zinc-300" />
                       <span>Migrate</span>
                     </button>
                     <button
                       onClick={() => handleRemoveTarget(idx)}
                       title="Remove Target"
-                      className="p-1 rounded text-slate-500 hover:text-rose-400 transition-colors"
+                      className="p-1 rounded text-zinc-500 hover:text-rose-400 transition-colors"
                     >
                       <Trash2 className="w-4 h-4" />
                     </button>
@@ -1327,30 +1396,30 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
             </div>
 
             {/* Add Target Input (Collapsible for manual entry) */}
-            <div className="pt-2 border-t border-slate-800/60 space-y-3">
+            <div className="pt-2 border-t border-[#222429] space-y-3">
               <button
                 type="button"
                 onClick={() => setShowManualAddTarget(!showManualAddTarget)}
-                className="flex items-center space-x-1.5 text-xs font-semibold text-slate-400 hover:text-slate-200 transition-colors"
+                className="flex items-center space-x-1.5 text-xs font-semibold text-zinc-400 hover:text-zinc-200 transition-colors"
               >
-                <span>Manual Entry: Add Target by Folder / Drive ID</span>
+                <span>Manual Entry: Add Storage Drive by ID</span>
                 {showManualAddTarget ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
               </button>
 
               {showManualAddTarget && (
-                <div className="bg-slate-900/60 border border-slate-800 rounded-xl p-4 space-y-3">
+                <div className="bg-[#18191d] border border-[#26282e] rounded-xl p-4 space-y-3">
                   <div className="grid grid-cols-3 gap-2">
                     <input
                       type="text"
                       placeholder="Label (e.g., Primary Drive)"
                       value={newTargetLabel}
                       onChange={(e) => setNewTargetLabel(e.target.value)}
-                      className="bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 text-xs text-slate-200 placeholder-slate-600 focus:outline-none focus:border-cyan-500"
+                      className="bg-[#131417] border border-[#222429] rounded-lg px-3 py-2 text-xs text-zinc-200 placeholder-zinc-500 focus:outline-none focus:border-zinc-500"
                     />
                     <select
                       value={newTargetType}
                       onChange={(e) => setNewTargetType(e.target.value as any)}
-                      className="bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-cyan-500"
+                      className="bg-[#131417] border border-[#222429] rounded-lg px-3 py-2 text-xs text-zinc-200 focus:outline-none focus:border-zinc-500"
                     >
                       <option value="SharedDrive">Shared Drive (Google Workspace)</option>
                       <option value="SharedFolder">Shared Folder (Personal Gmail)</option>
@@ -1360,15 +1429,19 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                       placeholder="Drive / Folder ID"
                       value={newTargetId}
                       onChange={(e) => setNewTargetId(e.target.value)}
-                      className="bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 text-xs text-slate-200 placeholder-slate-600 focus:outline-none focus:border-cyan-500 font-mono"
+                      className="bg-[#131417] border border-[#222429] rounded-lg px-3 py-2 text-xs text-zinc-200 placeholder-zinc-500 focus:outline-none focus:border-zinc-500 font-mono"
                     />
                   </div>
+
+                  <p className="text-[11px] text-zinc-500">
+                    Tip: Open the destination folder in Google Drive. Copy the ID string from your browser address bar after <span className="font-mono text-zinc-400">/folders/</span>
+                  </p>
 
                   <div className="flex items-center justify-between pt-1">
                     <button
                       onClick={handleAddTarget}
                       disabled={!newTargetId.trim() || !newTargetLabel.trim()}
-                      className="flex items-center space-x-1.5 px-3 py-2 rounded-lg text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-cyan-400 border border-slate-700 transition-all disabled:opacity-50"
+                      className="flex items-center space-x-1.5 px-3.5 py-2 rounded-xl text-xs font-semibold bg-[#222428] hover:bg-[#2b2d32] text-zinc-200 border border-[#2e3035] transition-all disabled:opacity-50"
                     >
                       <Plus className="w-3.5 h-3.5" />
                       <span>Add Target to List</span>
@@ -1378,11 +1451,10 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               )}
 
               <div className="flex items-center justify-between pt-2">
-
                 <button
                   onClick={handleSaveTargets}
                   disabled={isSavingTargets}
-                  className="px-5 py-2 rounded-lg text-xs font-semibold bg-cyan-600 hover:bg-cyan-500 text-white transition-all shadow-md shadow-cyan-600/30 disabled:opacity-50"
+                  className="px-5 py-2.5 rounded-xl text-xs font-semibold bg-zinc-100 hover:bg-white active:bg-zinc-200 text-zinc-950 transition-all shadow-sm border border-white/20 disabled:opacity-50"
                 >
                   {isSavingTargets ? 'Saving...' : 'Save Target Changes'}
                 </button>
@@ -1391,41 +1463,41 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
           </div>
         )}
 
-        {/* Section 5: Vault Backup & Migration */}
-        {activeVault && (
-          <div className="bg-slate-950 border border-slate-800 rounded-2xl p-6 space-y-4">
-            <div className="flex items-center justify-between border-b border-slate-800/80 pb-3">
+        {/* Tab 3: Vault Backup & Recovery */}
+        {activeSettingsTab === 'backup' && activeVault && (
+          <div className="bg-[#131417] border border-[#222429] rounded-2xl p-6 space-y-4">
+            <div className="flex items-center justify-between border-b border-[#222429] pb-3">
               <div className="flex items-center space-x-2">
                 <Share2 className="w-5 h-5 text-emerald-400" />
                 <div>
-                  <h3 className="text-sm font-bold text-slate-100">
-                    Vault Backup & Device Migration (.magvault)
+                  <h3 className="text-sm font-bold text-zinc-100">
+                    Vault Backup & Recovery
                   </h3>
-                  <p className="text-[11px] text-slate-500">
-                    Back up encrypted configuration tokens or files to migrate or restore your vault on another machine.
+                  <p className="text-[11px] text-zinc-500">
+                    Export encrypted backup tokens or configuration files to restore your vault on other devices.
                   </p>
                 </div>
               </div>
             </div>
 
             <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
-              <p className="text-xs text-slate-400 max-w-lg">
+              <p className="text-xs text-zinc-400 max-w-lg">
                 Back up your vault configuration. You can save an offline <code className="text-emerald-400">vault.json</code> descriptor to your computer, copy the base64 token, or optionally upload it to Google Drive.
               </p>
               <div className="flex items-center space-x-2 shrink-0">
                 <button
                   onClick={handleSaveJsonBackup}
                   disabled={isSavingJsonFile}
-                  className="flex items-center space-x-1.5 px-3 py-2 rounded-lg text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-slate-200 transition-all border border-slate-700 hover:border-slate-600 disabled:opacity-50"
+                  className="flex items-center space-x-1.5 px-3.5 py-2 rounded-xl text-xs font-semibold bg-[#18191d] hover:bg-[#222428] text-zinc-200 transition-all border border-[#26282e] disabled:opacity-50"
                   title="Save vault.json file to local storage or USB drive"
                 >
-                  <FileText className="w-3.5 h-3.5 text-cyan-400" />
+                  <FileText className="w-3.5 h-3.5 text-zinc-300" />
                   <span>{isSavingJsonFile ? 'Saving...' : 'Save vault.json'}</span>
                 </button>
                 <button
                   onClick={handleExportVaultBackup}
                   disabled={isExportingToken}
-                  className="flex items-center space-x-1.5 px-3 py-2 rounded-lg text-xs font-semibold bg-emerald-600 hover:bg-emerald-500 text-white transition-all shadow-md shadow-emerald-600/20 disabled:opacity-50"
+                  className="flex items-center space-x-1.5 px-3.5 py-2 rounded-xl text-xs font-semibold bg-zinc-100 hover:bg-white active:bg-zinc-200 text-zinc-950 transition-all shadow-sm border border-white/20 disabled:opacity-50"
                 >
                   <Key className="w-3.5 h-3.5" />
                   <span>{isExportingToken ? 'Generating...' : 'Export Token'}</span>
@@ -1433,10 +1505,10 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                 <button
                   onClick={handleUploadVaultToDrive}
                   disabled={isUploadingToCloud}
-                  className="flex items-center space-x-1.5 px-3 py-2 rounded-lg text-xs font-semibold bg-cyan-700/60 hover:bg-cyan-600/60 text-cyan-200 transition-all border border-cyan-500/30 disabled:opacity-50"
+                  className="flex items-center space-x-1.5 px-3.5 py-2 rounded-xl text-xs font-semibold bg-[#222428] hover:bg-[#2b2d32] text-zinc-200 transition-all border border-[#2e3035] disabled:opacity-50"
                   title="Upload vault.json descriptor to .magdrive/ on Google Drive (Optional)"
                 >
-                  <CloudUpload className="w-3.5 h-3.5 text-cyan-300" />
+                  <CloudUpload className="w-3.5 h-3.5 text-zinc-300" />
                   <span>{isUploadingToCloud ? 'Uploading...' : 'Sync to Drive'}</span>
                 </button>
               </div>
@@ -1457,12 +1529,12 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
             )}
 
             {exportedToken && (
-              <div className="bg-slate-900 border border-slate-800 rounded-xl p-4 space-y-2 mt-2">
-                <div className="flex items-center justify-between text-xs text-slate-400">
-                  <span className="font-semibold text-slate-300">Encrypted Backup Token:</span>
+              <div className="bg-[#18191d] border border-[#26282e] rounded-xl p-4 space-y-2 mt-2">
+                <div className="flex items-center justify-between text-xs text-zinc-400">
+                  <span className="font-semibold text-zinc-200">Encrypted Backup Token:</span>
                   <button
                     onClick={handleCopyBackupToken}
-                    className="flex items-center space-x-1 text-cyan-400 hover:text-cyan-300 font-semibold"
+                    className="flex items-center space-x-1 text-zinc-200 hover:text-white font-semibold"
                   >
                     {tokenCopied ? (
                       <Check className="w-3.5 h-3.5 text-emerald-400" />
@@ -1472,14 +1544,23 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                     <span>{tokenCopied ? 'Copied!' : 'Copy Token'}</span>
                   </button>
                 </div>
-                <div className="bg-slate-950 p-3 rounded-lg border border-slate-800 font-mono text-[10px] text-slate-300 break-all select-all max-h-28 overflow-y-auto">
+                <div className="bg-[#0c0d0e] p-3 rounded-lg border border-[#26282e] font-mono text-[10px] text-zinc-300 break-all select-all max-h-28 overflow-y-auto">
                   {exportedToken}
                 </div>
-                <p className="text-[11px] text-slate-500 italic">
+                <p className="text-[11px] text-zinc-500 italic">
                   * To restore on another computer, open Vault Menu &gt; Import Vault tab, then provide this token along with your vault passphrase.
                 </p>
               </div>
             )}
+          </div>
+        )}
+        {activeSettingsTab === 'backup' && !activeVault && (
+          <div className="bg-[#131417] border border-[#222429] rounded-2xl p-8 text-center text-zinc-400 text-xs">
+            <ShieldCheck className="w-8 h-8 text-zinc-600 mx-auto mb-2" />
+            <p className="font-semibold text-zinc-300">No Active Vault Selected</p>
+            <p className="text-zinc-500 mt-1">
+              Please select or create a Personal Vault in the sidebar to export backup tokens or descriptors.
+            </p>
           </div>
         )}
       </div>
@@ -1487,18 +1568,18 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
       {/* Target Migration & Evacuation Modal */}
       {migrationTarget && (
         <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-slate-950 border border-slate-800 rounded-2xl max-w-xl w-full p-6 space-y-5 shadow-2xl overflow-y-auto max-h-[90vh]">
+          <div className="bg-[#131417] border border-[#222429] rounded-2xl max-w-xl w-full p-6 space-y-5 shadow-2xl overflow-y-auto max-h-[90vh]">
             {/* Modal Header */}
-            <div className="flex items-center justify-between border-b border-slate-800/80 pb-3">
+            <div className="flex items-center justify-between border-b border-[#222429] pb-3">
               <div className="flex items-center space-x-2.5">
-                <div className="p-2 bg-cyan-950/60 border border-cyan-800/50 rounded-lg text-cyan-400">
+                <div className="p-2 bg-zinc-800 border border-zinc-700/80 rounded-lg text-zinc-200">
                   <ArrowLeftRight className="w-5 h-5" />
                 </div>
                 <div>
-                  <h3 className="text-sm font-bold text-slate-100">
-                    Target Migration &amp; Decommissioning
+                  <h3 className="text-sm font-bold text-zinc-100">
+                    Drive Migration &amp; Replacement
                   </h3>
-                  <p className="text-[11px] text-slate-400 font-mono">
+                  <p className="text-[11px] text-zinc-400 font-mono">
                     {migrationTarget.label} • {migrationTarget.target_id}
                   </p>
                 </div>
@@ -1506,58 +1587,58 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               <button
                 onClick={handleCloseMigration}
                 disabled={isMigrating}
-                className="text-slate-500 hover:text-slate-300 disabled:opacity-50 transition-colors p-1"
+                className="text-zinc-500 hover:text-zinc-300 disabled:opacity-50 transition-colors p-1"
               >
                 <X className="w-5 h-5" />
               </button>
             </div>
 
             {/* Target Diagnostic Stats */}
-            <div className="bg-slate-900/80 border border-slate-800/80 rounded-xl p-3.5 space-y-2">
-              <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider block">
+            <div className="bg-[#18191d] border border-[#26282e] rounded-xl p-3.5 space-y-2">
+              <span className="text-[10px] uppercase font-bold text-zinc-400 tracking-wider block">
                 Target Storage Footprint
               </span>
               {isLoadingStats ? (
-                <div className="flex items-center space-x-2 text-xs text-slate-400 py-2">
-                  <Loader2 className="w-4 h-4 animate-spin text-cyan-400" />
+                <div className="flex items-center space-x-2 text-xs text-zinc-400 py-2">
+                  <Loader2 className="w-4 h-4 animate-spin text-zinc-300" />
                   <span>Scanning vault packages and shard allocations...</span>
                 </div>
               ) : migrationStats ? (
                 <div className="grid grid-cols-3 gap-2 text-center text-xs">
-                  <div className="bg-slate-950/80 p-2.5 rounded-lg border border-slate-800/60">
-                    <span className="text-[10px] text-slate-500 block">Shards on Target</span>
-                    <span className="text-sm font-bold text-cyan-400 font-mono">
+                  <div className="bg-[#131417] p-2.5 rounded-lg border border-[#222429]">
+                    <span className="text-[10px] text-zinc-500 block">Shards on Target</span>
+                    <span className="text-sm font-bold text-zinc-100 font-mono">
                       {migrationStats.chunks_on_target}
                     </span>
                   </div>
-                  <div className="bg-slate-950/80 p-2.5 rounded-lg border border-slate-800/60">
-                    <span className="text-[10px] text-slate-500 block">Affected Packages</span>
-                    <span className="text-sm font-bold text-slate-200 font-mono">
+                  <div className="bg-[#131417] p-2.5 rounded-lg border border-[#222429]">
+                    <span className="text-[10px] text-zinc-500 block">Affected Packages</span>
+                    <span className="text-sm font-bold text-zinc-200 font-mono">
                       {migrationStats.affected_packages}
                     </span>
                   </div>
-                  <div className="bg-slate-950/80 p-2.5 rounded-lg border border-slate-800/60">
-                    <span className="text-[10px] text-slate-500 block">Total Vault Shards</span>
-                    <span className="text-sm font-bold text-slate-400 font-mono">
+                  <div className="bg-[#131417] p-2.5 rounded-lg border border-[#222429]">
+                    <span className="text-[10px] text-zinc-500 block">Total Vault Shards</span>
+                    <span className="text-sm font-bold text-zinc-400 font-mono">
                       {migrationStats.total_vault_chunks}
                     </span>
                   </div>
                 </div>
               ) : (
-                <div className="text-xs text-slate-500">No shard metadata found for this target.</div>
+                <div className="text-xs text-zinc-500">No shard metadata found for this target.</div>
               )}
             </div>
 
             {/* Mode Selector Tabs */}
-            <div className="grid grid-cols-2 gap-2 p-1 bg-slate-900 border border-slate-800 rounded-xl text-xs font-semibold">
+            <div className="grid grid-cols-2 gap-2 p-1 bg-[#18191d] border border-[#26282e] rounded-xl text-xs font-semibold">
               <button
                 type="button"
                 onClick={() => setMigrationMode('replace')}
                 disabled={isMigrating}
                 className={`py-2 px-3 rounded-lg transition-colors flex items-center justify-center space-x-2 ${
                   migrationMode === 'replace'
-                    ? 'bg-cyan-950 text-cyan-300 border border-cyan-800/60'
-                    : 'text-slate-400 hover:text-slate-200'
+                    ? 'bg-zinc-800 text-zinc-100 border border-zinc-700/80 shadow-sm'
+                    : 'text-zinc-400 hover:text-zinc-200'
                 }`}
               >
                 <span>Replace with New Target</span>
@@ -1568,8 +1649,8 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                 disabled={isMigrating || targets.length < 2}
                 className={`py-2 px-3 rounded-lg transition-colors flex items-center justify-center space-x-2 ${
                   migrationMode === 'evacuate'
-                    ? 'bg-amber-950 text-amber-300 border border-amber-800/60'
-                    : 'text-slate-400 hover:text-slate-200 disabled:opacity-40 disabled:hover:text-slate-400'
+                    ? 'bg-zinc-800 text-zinc-100 border border-zinc-700/80 shadow-sm'
+                    : 'text-zinc-400 hover:text-zinc-200 disabled:opacity-40 disabled:hover:text-zinc-400'
                 }`}
               >
                 <span>Evacuate &amp; Rebalance</span>
@@ -1578,17 +1659,17 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
 
             {/* Mode 1: Replace with New Target */}
             {migrationMode === 'replace' && (
-              <div className="space-y-3 bg-slate-900/50 p-4 rounded-xl border border-slate-800/60 text-xs">
-                <span className="text-xs font-bold text-slate-200 block">
+              <div className="space-y-3 bg-[#18191d] p-4 rounded-xl border border-[#26282e] text-xs">
+                <span className="text-xs font-bold text-zinc-200 block">
                   New Replacement Target Credentials
                 </span>
-                <p className="text-[11px] text-slate-400">
+                <p className="text-[11px] text-zinc-400">
                   Shards on the old target will be migrated via Google fast-copy (or reconstructed via Reed-Solomon if the old account is lost). Once finished, the new target seamlessly replaces the old one.
                 </p>
 
                 <div className="space-y-2 pt-1">
                   <div>
-                    <label className="text-[11px] text-slate-400 font-medium block mb-1">
+                    <label className="text-[11px] text-zinc-400 font-medium block mb-1">
                       New Target Label
                     </label>
                     <input
@@ -1597,20 +1678,20 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                       value={migrationNewName}
                       onChange={(e) => setMigrationNewName(e.target.value)}
                       disabled={isMigrating}
-                      className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-cyan-500"
+                      className="w-full bg-[#131417] border border-[#222429] rounded-lg px-3 py-2 text-xs text-zinc-200 focus:outline-none focus:border-zinc-500"
                     />
                   </div>
 
                   <div className="grid grid-cols-2 gap-2">
                     <div>
-                      <label className="text-[11px] text-slate-400 font-medium block mb-1">
+                      <label className="text-[11px] text-zinc-400 font-medium block mb-1">
                         Target Type
                       </label>
                       <select
                         value={migrationNewType}
                         onChange={(e) => setMigrationNewType(e.target.value as any)}
                         disabled={isMigrating}
-                        className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-cyan-500"
+                        className="w-full bg-[#131417] border border-[#222429] rounded-lg px-3 py-2 text-xs text-zinc-200 focus:outline-none focus:border-zinc-500"
                       >
                         <option value="SharedFolder">Personal Shared Folder</option>
                         <option value="SharedDrive">Google Workspace Shared Drive</option>
@@ -1618,7 +1699,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                     </div>
 
                     <div>
-                      <label className="text-[11px] text-slate-400 font-medium block mb-1">
+                      <label className="text-[11px] text-zinc-400 font-medium block mb-1">
                         Drive / Folder ID
                       </label>
                       <input
@@ -1627,7 +1708,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                         value={migrationNewId}
                         onChange={(e) => setMigrationNewId(e.target.value)}
                         disabled={isMigrating}
-                        className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs text-slate-200 font-mono focus:outline-none focus:border-cyan-500"
+                        className="w-full bg-[#131417] border border-[#222429] rounded-lg px-3 py-2 text-xs text-zinc-200 font-mono focus:outline-none focus:border-zinc-500"
                       />
                     </div>
                   </div>
@@ -1637,11 +1718,11 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
 
             {/* Mode 2: Evacuate & Rebalance */}
             {migrationMode === 'evacuate' && (
-              <div className="space-y-2 bg-amber-950/20 border border-amber-800/40 p-4 rounded-xl text-xs text-slate-300">
+              <div className="space-y-2 bg-[#18191d] border border-amber-800/40 p-4 rounded-xl text-xs text-zinc-300">
                 <span className="text-xs font-bold text-amber-300 block">
                   Evacuate Without Replacement
                 </span>
-                <p className="text-[11px] text-slate-400">
+                <p className="text-[11px] text-zinc-400">
                   All {migrationStats?.chunks_on_target ?? 0} shard(s) hosted on this target will be relocated and rebalanced across the remaining {targets.length - 1} connected target(s). Once complete, this target is safely removed from the vault.
                 </p>
                 {targets.length < 2 && (
@@ -1653,14 +1734,14 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
             )}
 
             {/* Common Options */}
-            <div className="space-y-3 pt-1 border-t border-slate-800/60 text-xs">
-              <label className="flex items-center space-x-2 text-slate-300 cursor-pointer">
+            <div className="space-y-3 pt-1 border-t border-[#222429] text-xs">
+              <label className="flex items-center space-x-2 text-zinc-300 cursor-pointer">
                 <input
                   type="checkbox"
                   checked={migrationDeleteOld}
                   onChange={(e) => setMigrationDeleteOld(e.target.checked)}
                   disabled={isMigrating}
-                  className="rounded bg-slate-900 border-slate-700 text-cyan-500 focus:ring-0"
+                  className="rounded bg-[#18191d] border-[#26282e] text-zinc-200 focus:ring-0"
                 />
                 <span className="text-[11px]">
                   Delete old shards from decommissioned drive after transfer (reclaim Google Drive quota)
@@ -1668,7 +1749,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               </label>
 
               <div>
-                <label className="text-[11px] text-slate-400 font-medium block mb-1">
+                <label className="text-[11px] text-zinc-400 font-medium block mb-1">
                   Vault Passphrase (Optional, required only for custom passphrase vaults)
                 </label>
                 <input
@@ -1677,22 +1758,22 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   value={migrationPassphrase}
                   onChange={(e) => setMigrationPassphrase(e.target.value)}
                   disabled={isMigrating}
-                  className="w-full bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 text-xs text-slate-200 font-mono focus:outline-none focus:border-cyan-500"
+                  className="w-full bg-[#18191d] border border-[#26282e] rounded-lg px-3 py-2 text-xs text-zinc-200 font-mono focus:outline-none focus:border-zinc-500"
                 />
               </div>
             </div>
 
             {/* Progress Display */}
             {isMigrating && migrationProgress && (
-              <div className="bg-slate-900/90 border border-cyan-800/40 rounded-xl p-4 space-y-3">
+              <div className="bg-[#18191d] border border-[#26282e] rounded-xl p-4 space-y-3">
                 <div className="flex items-center justify-between text-xs">
                   <div className="flex items-center space-x-2">
-                    <Loader2 className="w-4 h-4 animate-spin text-cyan-400" />
-                    <span className="font-semibold text-slate-200">
+                    <Loader2 className="w-4 h-4 animate-spin text-zinc-300" />
+                    <span className="font-semibold text-zinc-200">
                       {migrationProgress.message}
                     </span>
                   </div>
-                  <span className="font-mono text-cyan-400 font-bold">
+                  <span className="font-mono text-zinc-100 font-bold">
                     {migrationProgress.total_chunks > 0
                       ? Math.round(
                           (migrationProgress.current_chunk / migrationProgress.total_chunks) * 100
@@ -1702,9 +1783,9 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   </span>
                 </div>
 
-                <div className="w-full bg-slate-950 h-2 rounded-full overflow-hidden border border-slate-800">
+                <div className="w-full bg-[#131417] h-2 rounded-full overflow-hidden border border-[#222429]">
                   <div
-                    className="bg-gradient-to-r from-cyan-500 to-emerald-500 h-full transition-all duration-300"
+                    className="bg-zinc-100 h-full transition-all duration-300"
                     style={{
                       width: `${
                         migrationProgress.total_chunks > 0
@@ -1715,14 +1796,14 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   />
                 </div>
 
-                <div className="flex items-center space-x-2 text-[10px] text-slate-400 font-mono">
-                  <span className="px-2 py-0.5 rounded bg-slate-950 border border-slate-800">
+                <div className="flex items-center space-x-2 text-[10px] text-zinc-400 font-mono">
+                  <span className="px-2 py-0.5 rounded bg-[#131417] border border-[#222429]">
                     Copied: {migrationProgress.copied_chunks}
                   </span>
-                  <span className="px-2 py-0.5 rounded bg-slate-950 border border-slate-800">
+                  <span className="px-2 py-0.5 rounded bg-[#131417] border border-[#222429]">
                     Relayed: {migrationProgress.relayed_chunks}
                   </span>
-                  <span className="px-2 py-0.5 rounded bg-slate-950 border border-slate-800">
+                  <span className="px-2 py-0.5 rounded bg-[#131417] border border-[#222429]">
                     Reconstructed: {migrationProgress.reconstructed_chunks}
                   </span>
                 </div>
@@ -1751,12 +1832,12 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
             )}
 
             {/* Modal Actions */}
-            <div className="flex items-center justify-end space-x-2 pt-2 border-t border-slate-800/80">
+            <div className="flex items-center justify-end space-x-2 pt-2 border-t border-[#222429]">
               <button
                 type="button"
                 onClick={handleCloseMigration}
                 disabled={isMigrating}
-                className="px-4 py-2 rounded-lg bg-slate-900 hover:bg-slate-800 text-slate-300 text-xs font-semibold transition-colors disabled:opacity-50"
+                className="px-4 py-2 rounded-xl bg-[#18191d] hover:bg-[#222428] text-zinc-300 text-xs font-semibold transition-all border border-[#26282e] disabled:opacity-50"
               >
                 {migrationResult ? 'Close' : 'Cancel'}
               </button>
@@ -1768,11 +1849,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   (migrationMode === 'replace' && !migrationNewId.trim()) ||
                   (migrationMode === 'evacuate' && targets.length < 2)
                 }
-                className={`px-4 py-2 rounded-lg text-xs font-bold transition-colors flex items-center space-x-2 ${
-                  migrationMode === 'replace'
-                    ? 'bg-cyan-500 hover:bg-cyan-400 text-slate-950 disabled:bg-cyan-950 disabled:text-cyan-800'
-                    : 'bg-amber-500 hover:bg-amber-400 text-slate-950 disabled:bg-amber-950 disabled:text-amber-800'
-                }`}
+                className="px-4 py-2 rounded-xl text-xs font-semibold transition-all flex items-center space-x-2 bg-zinc-100 hover:bg-white active:bg-zinc-200 text-zinc-950 border border-white/20 shadow-sm disabled:opacity-50"
               >
                 {isMigrating ? (
                   <>
@@ -1789,6 +1866,13 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
           </div>
         </div>
       )}
+
+      {/* Cloud Descriptor Confirmation Dialog */}
+      <ConfirmModal
+        isOpen={!!confirmDialog}
+        options={confirmDialog}
+        onClose={() => setConfirmDialog(null)}
+      />
     </div>
   );
 };

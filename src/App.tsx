@@ -17,6 +17,8 @@ import { DownloadModal } from './components/DownloadModal';
 
 import { PackageManifest, TransferRecord, VaultRecord, VaultTarget, TransferProgressPayload } from './types';
 import { api } from './services/api';
+import { ToastContainer, ToastMessage, ToastType } from './components/ui/Toast';
+import { ConfirmModal, ConfirmDialogOptions } from './components/ui/ConfirmModal';
 
 export function App() {
   const [activeTab, setActiveTab] = useState<ActiveTab>('explorer');
@@ -26,10 +28,22 @@ export function App() {
   const [transfers, setTransfers] = useState<TransferRecord[]>([]);
   const [isSyncing, setIsSyncing] = useState(false);
   const [isDownloading, setIsDownloading] = useState<string | null>(null);
+  const [toasts, setToasts] = useState<ToastMessage[]>([]);
+  const [confirmDialog, setConfirmDialog] = useState<ConfirmDialogOptions | null>(null);
+  const [stagedUploadFile, setStagedUploadFile] = useState<File | null>(null);
   const [downloadToast, setDownloadToast] = useState<{
     fileName: string;
     destinationPath: string;
   } | null>(null);
+
+  const addToast = (type: ToastType, message: string, title?: string) => {
+    const id = 'toast_' + Date.now() + '_' + Math.random().toString(36).substring(2, 7);
+    setToasts((prev) => [...prev, { id, type, title, message }]);
+  };
+
+  const dismissToast = (id: string) => {
+    setToasts((prev) => prev.filter((t) => t.id !== id));
+  };
 
   // Modals
   const [isMagnetModalOpen, setIsMagnetModalOpen] = useState(false);
@@ -46,7 +60,11 @@ export function App() {
 
     // Listen for OAuth success event
     const unlistenOAuth = listen('oauth-success', () => {
-      alert('Google Workspace account authenticated and connected successfully!');
+      addToast(
+        'success',
+        'Google Workspace account authenticated and connected successfully!',
+        'Account Connected'
+      );
     });
 
     // Listen for transfer progress updates
@@ -122,8 +140,9 @@ export function App() {
       setIsSyncing(true);
       await api.syncCatalog();
       await refreshFiles();
+      addToast('success', 'Catalog synchronized successfully with remote storage.', 'Catalog Synced');
     } catch (err: any) {
-      alert('Failed to sync catalog: ' + (err?.toString() || ''));
+      addToast('error', 'Failed to sync catalog: ' + (err?.toString() || ''), 'Sync Error');
     } finally {
       setIsSyncing(false);
     }
@@ -133,8 +152,9 @@ export function App() {
     try {
       const magnetLink = await api.generateMagnet(packageId);
       await navigator.clipboard.writeText(magnetLink);
+      addToast('success', 'Magnet Link copied to clipboard.', 'Copied');
     } catch (err) {
-      console.error('Failed to generate magnet:', err);
+      addToast('error', 'Failed to generate magnet: ' + String(err), 'Error');
     }
   };
 
@@ -162,10 +182,10 @@ export function App() {
       try {
         await executeDownload(packageId, destinationPath, fileName);
       } catch (err: any) {
-        alert('Failed to download file: ' + (err?.toString() || ''));
+        addToast('error', 'Failed to download file: ' + (err?.toString() || ''), 'Download Error');
       }
     } catch (err: any) {
-      alert('Failed to prepare download: ' + (err?.toString() || ''));
+      addToast('error', 'Failed to prepare download: ' + (err?.toString() || ''), 'Download Error');
     }
   };
 
@@ -180,6 +200,7 @@ export function App() {
         fileName: displayName || destinationPath.split(/[/\\]/).pop() || 'file',
         destinationPath: result.destination_path,
       });
+      addToast('success', `File downloaded successfully to ${result.destination_path}`, 'Download Complete');
     } catch (err: any) {
       console.error('Download error:', err);
       throw err;
@@ -188,16 +209,25 @@ export function App() {
     }
   };
 
-  const handleDelete = async (packageId: string) => {
-    if (!confirm('Are you sure you want to delete this file from the vault and all cloud storage targets?')) {
-      return;
-    }
-    try {
-      await api.deletePackage(packageId);
-      await refreshFiles();
-    } catch (err: any) {
-      alert('Failed to delete file: ' + (err?.toString() || ''));
-    }
+  const handleDelete = (packageId: string) => {
+    const pkg = files.find((f) => f.package_id === packageId);
+    const fileName = pkg ? pkg.name : packageId;
+
+    setConfirmDialog({
+      title: 'Delete Vault File',
+      message: `Permanently delete "${fileName}" from this vault and all cloud storage targets? This action cannot be undone.`,
+      confirmText: 'Delete File',
+      variant: 'danger',
+      onConfirm: async () => {
+        try {
+          await api.deletePackage(packageId);
+          await refreshFiles();
+          addToast('success', `"${fileName}" deleted successfully.`, 'File Deleted');
+        } catch (err: any) {
+          addToast('error', 'Failed to delete file: ' + (err?.toString() || ''), 'Error');
+        }
+      },
+    });
   };
 
   const handleUploadFile = async (
@@ -221,11 +251,22 @@ export function App() {
     await refreshTransfers();
   };
 
-  const handleCancelTransfer = async (transferId: string) => {
-    if (confirm('Cancel this transfer? Incomplete chunks will be deleted from Google Drive.')) {
-      await api.cancelTransfer(transferId);
-      await refreshTransfers();
-    }
+  const handleCancelTransfer = (transferId: string) => {
+    setConfirmDialog({
+      title: 'Cancel Transfer',
+      message: 'Cancel this transfer? Incomplete chunks will be deleted from Google Drive.',
+      confirmText: 'Cancel Transfer',
+      variant: 'warning',
+      onConfirm: async () => {
+        try {
+          await api.cancelTransfer(transferId);
+          await refreshTransfers();
+          addToast('info', 'Transfer cancelled and incomplete chunks removed.', 'Transfer Cancelled');
+        } catch (err: any) {
+          addToast('error', 'Failed to cancel transfer: ' + (err?.toString() || ''), 'Error');
+        }
+      },
+    });
   };
 
   const handleDeleteTransfer = async (transferId: string) => {
@@ -236,6 +277,7 @@ export function App() {
   const handleClearFinished = async () => {
     await api.clearFinishedTransfers();
     await refreshTransfers();
+    addToast('info', 'Finished transfers cleared from queue.', 'Queue Updated');
   };
 
   const handleCreateVault = async (name: string, passphrase: string, targets: VaultTarget[]) => {
@@ -244,6 +286,7 @@ export function App() {
     setVaults(vList);
     setActiveVault(record);
     await refreshFiles();
+    addToast('success', `Vault "${name}" created successfully!`, 'Vault Created');
   };
 
   const handleImportVault = async (token: string, passphrase: string) => {
@@ -252,16 +295,32 @@ export function App() {
     setVaults(vList);
     setActiveVault(record);
     await refreshFiles();
+    addToast('success', `Vault "${record.name}" imported successfully!`, 'Vault Imported');
   };
 
-  const handleDeleteVault = async (vaultId: string) => {
-    await api.deleteVault(vaultId);
-    const vList = await api.listVaults();
-    setVaults(vList);
-    if (activeVault?.id === vaultId) {
-      setActiveVault(vList[0] || null);
-    }
-    await refreshFiles();
+  const handleDeleteVault = (vaultId: string, vaultName?: string) => {
+    const name = vaultName || vaults.find((v) => v.id === vaultId)?.name || 'this vault';
+
+    setConfirmDialog({
+      title: 'Remove Vault',
+      message: `Remove vault "${name}" from your local application list? Your encrypted chunks stored in Google Drive will remain intact.`,
+      confirmText: 'Remove Vault',
+      variant: 'danger',
+      onConfirm: async () => {
+        try {
+          await api.deleteVault(vaultId);
+          const vList = await api.listVaults();
+          setVaults(vList);
+          if (activeVault?.id === vaultId) {
+            setActiveVault(vList[0] || null);
+          }
+          await refreshFiles();
+          addToast('info', `Vault "${name}" removed from local list.`, 'Vault Removed');
+        } catch (err: any) {
+          addToast('error', 'Failed to remove vault: ' + (err?.toString() || ''), 'Error');
+        }
+      },
+    });
   };
 
   const handleUpdateTargets = async (targets: VaultTarget[]) => {
@@ -277,7 +336,8 @@ export function App() {
   };
 
   return (
-    <div className="flex h-screen w-screen overflow-hidden bg-slate-950 font-sans antialiased text-slate-100">
+    <div className="flex h-screen w-screen overflow-hidden bg-[#0c0d0e] font-sans antialiased text-zinc-100 relative">
+      <div className="tactile-grain" aria-hidden="true" />
       {/* Left Sidebar */}
       <Sidebar
         activeTab={activeTab}
@@ -304,10 +364,17 @@ export function App() {
               onDownload={handleDownload}
               onDelete={handleDelete}
               onCopyMagnet={handleCopyMagnet}
-              onGoToUpload={() => setActiveTab('upload')}
+              onGoToUpload={() => {
+                setStagedUploadFile(null);
+                setActiveTab('upload');
+              }}
               isDownloading={isDownloading}
               onSync={handleSync}
               isSyncing={isSyncing}
+              onFileDrop={(file) => {
+                setStagedUploadFile(file);
+                setActiveTab('upload');
+              }}
             />
           )}
 
@@ -315,7 +382,11 @@ export function App() {
             <UploadView
               activeVault={activeVault}
               onUploadFile={handleUploadFile}
-              onGoToExplorer={() => setActiveTab('explorer')}
+              onGoToExplorer={() => {
+                setStagedUploadFile(null);
+                setActiveTab('explorer');
+              }}
+              initialFile={stagedUploadFile}
             />
           )}
 
@@ -379,21 +450,21 @@ export function App() {
 
       {/* Download Completion Notification Banner */}
       {downloadToast && (
-        <div className="fixed bottom-6 right-6 z-50 bg-slate-900 border border-emerald-500/40 rounded-2xl p-4 shadow-2xl shadow-emerald-950/60 flex items-start space-x-3.5 max-w-md backdrop-blur-md">
-          <div className="w-8 h-8 rounded-xl bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 flex items-center justify-center shrink-0 mt-0.5">
+        <div className="fixed bottom-6 right-6 z-50 bg-[#151618] border border-[#27292d] rounded-2xl p-4 shadow-2xl flex items-start space-x-3.5 max-w-md backdrop-blur-md">
+          <div className="w-8 h-8 rounded-xl bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 flex items-center justify-center shrink-0 mt-0.5">
             <CheckCircle2 className="w-4 h-4" />
           </div>
           <div className="flex-1 min-w-0">
-            <div className="text-xs font-bold text-slate-100 flex items-center justify-between">
+            <div className="text-xs font-bold text-zinc-100 flex items-center justify-between">
               <span>Download Complete</span>
               <button
                 onClick={() => setDownloadToast(null)}
-                className="text-slate-500 hover:text-slate-300 transition-colors ml-2"
+                className="text-zinc-500 hover:text-zinc-300 transition-colors ml-2"
               >
                 <X className="w-3.5 h-3.5" />
               </button>
             </div>
-            <p className="text-[11px] text-slate-300 font-mono truncate mt-0.5" title={downloadToast.fileName}>
+            <p className="text-[11px] text-zinc-300 font-mono truncate mt-0.5" title={downloadToast.fileName}>
               {downloadToast.fileName}
             </p>
             <div className="flex items-center space-x-2 mt-2.5">
@@ -405,7 +476,7 @@ export function App() {
                     console.error('Failed to reveal file:', e);
                   }
                 }}
-                className="flex items-center space-x-1 px-2.5 py-1 rounded-lg text-[11px] font-semibold bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-300 border border-emerald-500/30 transition-all"
+                className="flex items-center space-x-1 px-2.5 py-1 rounded-lg text-[11px] font-semibold bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-300 border border-emerald-500/30 transition-all"
               >
                 <FolderOpen className="w-3 h-3" />
                 <span>Show in Folder</span>
@@ -418,7 +489,7 @@ export function App() {
                     console.error('Failed to open file:', e);
                   }
                 }}
-                className="flex items-center space-x-1 px-2.5 py-1 rounded-lg text-[11px] font-semibold bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 transition-all"
+                className="flex items-center space-x-1 px-2.5 py-1 rounded-lg text-[11px] font-semibold bg-[#222428] hover:bg-[#2b2d32] text-zinc-200 border border-[#2e3035] transition-all"
               >
                 <ExternalLink className="w-3 h-3" />
                 <span>Open File</span>
@@ -427,6 +498,16 @@ export function App() {
           </div>
         </div>
       )}
+
+      {/* Global Toast Notifications */}
+      <ToastContainer toasts={toasts} onDismiss={dismissToast} />
+
+      {/* Global Confirm Modal */}
+      <ConfirmModal
+        isOpen={!!confirmDialog}
+        options={confirmDialog}
+        onClose={() => setConfirmDialog(null)}
+      />
     </div>
   );
 }
