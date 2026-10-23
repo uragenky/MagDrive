@@ -2,7 +2,8 @@
 name = "magdrive"
 version = "0.1.0"
 description = "MagDrive - Distributed Encrypted Vault"
-authors = ["MagDrive Team"]
+authors = ["ura_genky <ura_genky@yahoo.com>"]
+license = "GPL-3.0-or-later"
 edition = "2021"
 
 [lib]
