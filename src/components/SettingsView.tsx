@@ -771,23 +771,23 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
         {/* Tab 1: Accounts & Storage (Part 1: Google Accounts Pool) */}
         {activeSettingsTab === 'storage' && (
           <div className="bg-[#131417] border border-[#222429] rounded-2xl p-6 space-y-5">
-          <div className="flex items-center justify-between border-b border-[#222429] pb-3">
-            <div className="flex items-center space-x-2">
-              <Users className="w-5 h-5 text-emerald-400" />
-              <div>
+          <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3 border-b border-[#222429] pb-3">
+            <div className="flex items-center space-x-2 min-w-0">
+              <Users className="w-5 h-5 text-emerald-400 shrink-0" />
+              <div className="min-w-0">
                 <h3 className="text-sm font-bold text-zinc-100">Connected Google Accounts</h3>
                 <p className="text-[11px] text-zinc-400 mt-0.5">
                   Connect one or more Google accounts. Quotas are pooled together automatically for multi-drive redundancy.
                 </p>
               </div>
             </div>
-            <div className="flex items-center space-x-2">
+            <div className="flex items-center flex-wrap gap-2 shrink-0">
               <button
                 type="button"
                 onClick={fetchGoogleAccounts}
                 disabled={isLoadingAccounts}
                 title="Refresh accounts & storage quotas"
-                className="h-9 px-3.5 inline-flex items-center justify-center space-x-1.5 rounded-xl text-xs font-semibold bg-[#18191d] hover:bg-[#222428] text-zinc-300 hover:text-zinc-100 border border-[#26282e] transition-all disabled:opacity-50 shrink-0"
+                className="h-9 px-3.5 inline-flex items-center justify-center space-x-1.5 rounded-xl text-xs font-semibold bg-[#18191d] hover:bg-[#222428] text-zinc-300 hover:text-zinc-100 border border-[#26282e] transition-all disabled:opacity-50"
               >
                 <RefreshCw className={`w-3.5 h-3.5 ${isLoadingAccounts ? 'animate-spin text-zinc-300' : ''}`} />
                 <span>{isLoadingAccounts ? 'Refreshing...' : 'Refresh'}</span>
@@ -797,7 +797,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   type="button"
                   onClick={handleLogout}
                   title="Disconnect all accounts"
-                  className="h-9 px-3.5 inline-flex items-center justify-center space-x-1.5 rounded-xl text-xs font-semibold bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/20 transition-all shrink-0"
+                  className="h-9 px-3.5 inline-flex items-center justify-center space-x-1.5 rounded-xl text-xs font-semibold bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/20 transition-all"
                 >
                   <Unlink className="w-3.5 h-3.5" />
                   <span>Disconnect All</span>
@@ -806,7 +806,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               <button
                 onClick={handleConnectGoogle}
                 disabled={!clientId.trim()}
-                className="h-9 px-3.5 inline-flex items-center justify-center space-x-1.5 rounded-xl text-xs font-semibold bg-zinc-100 hover:bg-white active:bg-zinc-200 text-zinc-950 transition-all shadow-sm border border-white/20 disabled:opacity-50 shrink-0"
+                className="h-9 px-3.5 inline-flex items-center justify-center space-x-1.5 rounded-xl text-xs font-semibold bg-zinc-100 hover:bg-white active:bg-zinc-200 text-zinc-950 transition-all shadow-sm border border-white/20 disabled:opacity-50"
               >
                 <Plus className="w-3.5 h-3.5" />
                 <span>Connect Google Account</span>
@@ -817,14 +817,14 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
           {/* Manual Link Fallback */}
           {authUrlManual && (
             <div className="p-4 rounded-xl bg-[#18191d] border border-[#26282e] space-y-3">
-              <div className="flex items-start justify-between">
+              <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-2">
                 <div>
                   <h4 className="text-xs font-bold text-zinc-200">Browser Did Not Open Automatically?</h4>
                   <p className="text-[11px] text-zinc-400 mt-0.5">
                     Click the button below to launch the authorization window, or copy the link directly into your browser.
                   </p>
                 </div>
-                <div className="flex items-center space-x-2">
+                <div className="flex items-center flex-wrap gap-2 shrink-0">
                   <button
                     onClick={() => openUrl(authUrlManual)}
                     className="flex items-center space-x-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-zinc-800 text-zinc-200 hover:bg-zinc-700 border border-zinc-700 transition-all"
@@ -887,25 +887,25 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                     className="bg-[#18191d] border border-[#26282e] rounded-xl p-4 space-y-3 hover:border-[#353840] transition-all"
                   >
                     {/* Account Header */}
-                    <div className="flex items-start justify-between">
-                      <div className="flex items-center space-x-3">
-                        <div className="w-9 h-9 rounded-full bg-zinc-800 text-zinc-100 border border-zinc-700/60 flex items-center justify-center font-bold text-sm">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="flex items-center space-x-3 min-w-0">
+                        <div className="w-9 h-9 rounded-full bg-zinc-800 text-zinc-100 border border-zinc-700/60 flex items-center justify-center font-bold text-sm shrink-0">
                           {acc.displayName.charAt(0).toUpperCase()}
                         </div>
-                        <div>
-                          <div className="flex items-center space-x-2">
-                            <span className="text-xs font-bold text-zinc-100">{acc.displayName}</span>
-                            <span className="text-[10px] text-emerald-400 font-mono bg-emerald-950/80 border border-emerald-800/60 px-1.5 py-0.2 rounded">
+                        <div className="min-w-0">
+                          <div className="flex items-center space-x-2 flex-wrap">
+                            <span className="text-xs font-bold text-zinc-100 truncate">{acc.displayName}</span>
+                            <span className="text-[10px] text-emerald-400 font-mono bg-emerald-950/80 border border-emerald-800/60 px-1.5 py-0.2 rounded shrink-0">
                               Connected
                             </span>
                           </div>
-                          <span className="text-[11px] text-zinc-400 font-mono block">
+                          <span className="text-[11px] text-zinc-400 font-mono block truncate">
                             {acc.email}
                           </span>
                         </div>
                       </div>
 
-                      <div className="flex items-center space-x-1.5">
+                      <div className="flex items-center space-x-1.5 shrink-0">
                         <button
                           onClick={() => handleRemoveAccount(acc.email)}
                           title="Disconnect account"
@@ -977,10 +977,10 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                     </div>
 
                     {/* Auto Folder & 1-Click Vault Actions */}
-                    <div className="pt-1 flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-t border-[#222429]">
-                      <div className="flex items-center space-x-1.5 text-[11px] text-zinc-400">
+                    <div className="pt-1 flex flex-col md:flex-row md:items-center justify-between gap-2.5 border-t border-[#222429]">
+                      <div className="flex items-center space-x-1.5 text-[11px] text-zinc-400 min-w-0">
                         <Folder className="w-3.5 h-3.5 text-zinc-300 shrink-0" />
-                        <span>
+                        <span className="truncate">
                           {isTargetAdded ? (
                             <>
                               Vault Folder: <strong className="text-zinc-200">MagDrive - {activeVault?.name}</strong>
@@ -996,12 +996,12 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                         </span>
                       </div>
 
-                      <div className="flex items-center space-x-2">
+                      <div className="flex items-center flex-wrap gap-2 shrink-0">
                         {/* Auto Personal Target Button */}
                         <button
                           onClick={() => handleAutoAddAccountTarget(acc.email)}
                           disabled={!activeVault || isTargetAdded}
-                          className={`flex items-center space-x-1 px-2.5 py-1.5 rounded-lg text-xs font-semibold transition-all ${
+                          className={`flex items-center space-x-1 px-2.5 py-1.5 rounded-lg text-xs font-semibold transition-all shrink-0 ${
                             isTargetAdded
                               ? 'bg-zinc-800 text-emerald-400 border border-emerald-900/40 cursor-default'
                               : 'bg-zinc-800 hover:bg-zinc-700 text-zinc-200 border border-zinc-700'
@@ -1023,7 +1023,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                         {/* Toggle Shared Drives */}
                         <button
                           onClick={() => handleToggleSharedDrives(acc.email)}
-                          className="flex items-center space-x-1 px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-[#18191d] hover:bg-[#222428] text-zinc-300 border border-[#26282e] transition-all"
+                          className="flex items-center space-x-1 px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-[#18191d] hover:bg-[#222428] text-zinc-300 border border-[#26282e] transition-all shrink-0"
                         >
                           <HardDrive className="w-3.5 h-3.5 text-zinc-400" />
                           <span>Shared Drives</span>
@@ -1052,7 +1052,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                             No Google Workspace Shared Drives found for this account.
                           </p>
                         ) : (
-                          <div className="flex items-center space-x-2">
+                          <div className="flex flex-col sm:flex-row sm:items-center gap-2">
                             <select
                               value={selectedSharedDrive[acc.email] || (drives[0]?.id || '')}
                               onChange={(e) =>
@@ -1061,7 +1061,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                                   [acc.email]: e.target.value,
                                 }))
                               }
-                              className="flex-1 bg-[#131417] border border-[#222429] rounded-lg px-3 py-1.5 text-xs text-zinc-200 focus:outline-none focus:border-zinc-500"
+                              className="flex-1 min-w-0 bg-[#131417] border border-[#222429] rounded-lg px-3 py-1.5 text-xs text-zinc-200 focus:outline-none focus:border-zinc-500"
                             >
                               {drives.map((d) => (
                                 <option key={d.id} value={d.id}>
@@ -1072,7 +1072,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                             <button
                               onClick={() => handleAddSharedDriveTarget(acc.email)}
                               disabled={!activeVault || drives.length === 0}
-                              className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-zinc-100 hover:bg-white active:bg-zinc-200 text-zinc-950 shadow-sm border border-white/20 transition-all disabled:opacity-50"
+                              className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-zinc-100 hover:bg-white active:bg-zinc-200 text-zinc-950 shadow-sm border border-white/20 transition-all disabled:opacity-50 shrink-0"
                             >
                               Add Drive to Vault
                             </button>
@@ -1357,22 +1357,22 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               {targets.map((t, idx) => (
                 <div
                   key={idx}
-                  className="flex items-center justify-between bg-[#18191d] border border-[#26282e] rounded-lg p-3 text-xs"
+                  className="flex items-center justify-between bg-[#18191d] border border-[#26282e] rounded-lg p-3 text-xs gap-3"
                 >
-                  <div className="flex items-center space-x-3">
-                    <span className="w-5 h-5 rounded-full bg-[#131417] text-zinc-400 flex items-center justify-center font-bold text-[10px] border border-[#222429]">
+                  <div className="flex items-center space-x-3 min-w-0">
+                    <span className="w-5 h-5 rounded-full bg-[#131417] text-zinc-400 flex items-center justify-center font-bold text-[10px] border border-[#222429] shrink-0">
                       {idx + 1}
                     </span>
-                    <div>
-                      <div className="font-semibold text-zinc-200 flex items-center space-x-2">
-                        <span>{t.label}</span>
+                    <div className="min-w-0">
+                      <div className="font-semibold text-zinc-200 flex items-center space-x-2 flex-wrap">
+                        <span className="truncate">{t.label}</span>
                         {t.account_email && (
-                          <span className="text-[10px] font-mono bg-emerald-950/80 text-emerald-400 border border-emerald-800/60 px-1.5 py-0.2 rounded">
+                          <span className="text-[10px] font-mono bg-emerald-950/80 text-emerald-400 border border-emerald-800/60 px-1.5 py-0.2 rounded shrink-0">
                             Owner: {t.account_email}
                           </span>
                         )}
                       </div>
-                      <div className="text-[10px] text-zinc-500 font-mono flex items-center space-x-1.5 flex-wrap mt-0.5">
+                      <div className="text-[10px] text-zinc-500 font-mono flex items-center space-x-1.5 flex-wrap mt-0.5 break-all">
                         <span>{t.target_type === 'SharedDrive' ? 'Google Workspace Shared Drive' : 'Personal Shared Folder'} • ID: {t.target_id}</span>
                         {targetUsageMap[t.target_id] && (
                           <span className="text-zinc-300 font-medium bg-[#131417] px-1.5 py-0.5 rounded border border-[#222429]">
@@ -1382,7 +1382,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                       </div>
                     </div>
                   </div>
-                  <div className="flex items-center space-x-1.5">
+                  <div className="flex items-center space-x-1.5 shrink-0">
                     <button
                       onClick={() => handleOpenMigration(t)}
                       title="Migrate or Evacuate Shards"
