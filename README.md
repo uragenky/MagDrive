@@ -7,6 +7,7 @@
 ## Table of Contents
 
 - [Overview](#overview)
+- [Screenshots & Visual Tour](#screenshots--visual-tour)
 - [Key Features](#key-features)
 - [System Architecture](#system-architecture)
 - [Cryptographic & Redundancy Design](#cryptographic--redundancy-design)
@@ -37,6 +38,34 @@ Files uploaded through MagDrive are:
 2. **Encrypted locally** on the client side with **AES-256-GCM** before leaving your machine.
 3. **Protected with Reed-Solomon Erasure Coding ($2+1$ or $1+1$)**, distributing shards across multiple drives. Even if one of the Shared Drives is permanently deleted, revoked, or corrupted, the client automatically reconstructs the lost data from the remaining parity shards on the fly.
 4. **Referenced by Magnet Links (`magdrive://`)**, enabling seamless sharing within the group without relying on a centralized server.
+
+---
+
+## Screenshots & Visual Tour
+
+<p align="center">
+  <img src="docs/images/magdrive-settings-accounts.png" alt="Connected Google Accounts and Drive Redundancy" width="900" style="border-radius: 12px; border: 1px solid #222429; box-shadow: 0 8px 30px rgba(0,0,0,0.5);">
+  <br>
+  <em>Multi-Account OAuth Pool: Aggregate multiple personal and Workspace drives into a unified, zero-knowledge storage vault with automatic Reed-Solomon redundancy.</em>
+</p>
+
+<p align="center">
+  <img src="docs/images/magdrive-explorer.png" alt="Data Bank Explorer" width="900" style="border-radius: 12px; border: 1px solid #222429; box-shadow: 0 8px 30px rgba(0,0,0,0.5);">
+  <br>
+  <em>Data Bank: Client-side encrypted file catalog with real-time shard maps, health indicators, and 1-click Magnet URI creation.</em>
+</p>
+
+<p align="center">
+  <img src="docs/images/magdrive-transfers.png" alt="Streaming Transfer Pipeline" width="900" style="border-radius: 12px; border: 1px solid #222429; box-shadow: 0 8px 30px rgba(0,0,0,0.5);">
+  <br>
+  <em>Streaming Transfer Pipeline: Live shard-by-shard concurrency, transfer metrics, and speed gauges.</em>
+</p>
+
+<p align="center">
+  <img src="docs/images/magdrive-health.png" alt="Self-Healing and Redundancy Monitor" width="900" style="border-radius: 12px; border: 1px solid #222429; box-shadow: 0 8px 30px rgba(0,0,0,0.5);">
+  <br>
+  <em>Self-Healing & Drive Health: Continuous monitoring and Galois Field GF(2^8) Reed-Solomon parity recovery.</em>
+</p>
 
 ---
 
