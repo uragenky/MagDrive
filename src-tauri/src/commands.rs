@@ -216,6 +216,30 @@ pub fn get_or_derive_master_key(
     Ok(key)
 }
 
+pub fn save_wrapped_package_key(
+    state: &AppState,
+    vault_id: &str,
+    package_id: &str,
+    package_key: &[u8; 32],
+) {
+    if let Ok(Some(vault)) = state.db.get_vault(vault_id) {
+        let master_key = {
+            let lock = state.key_cache.lock().unwrap();
+            lock.iter()
+                .find(|(k, _)| k.starts_with(&vault.id))
+                .map(|(_, val)| *val)
+        }.unwrap_or_else(|| {
+            let salt = hex::decode(&vault.salt_hex).unwrap_or_default();
+            get_or_derive_master_key(&state.key_cache, &vault.id, "magdrive", &salt).unwrap_or([0u8; 32])
+        });
+
+        if let Ok(wrapped) = encrypt_chunk(package_key, &master_key) {
+            let wrapped_b64 = base64::engine::general_purpose::STANDARD.encode(&wrapped);
+            let _ = state.db.set_package_key_enc(package_id, &wrapped_b64);
+        }
+    }
+}
+
 // ----------------------------------------------------
 // Download Settings & Dialog Commands
 // ----------------------------------------------------
@@ -1301,6 +1325,19 @@ pub async fn resolve_magnet_package(
 
     // If package is already in local SQLite DB
     if let Ok(Some(existing_pkg)) = state.db.get_package(&info.package_id) {
+        if let Some(ref key_str) = info.key {
+            if let Ok(key_bytes) = base64::engine::general_purpose::URL_SAFE_NO_PAD
+                .decode(key_str)
+                .or_else(|_| base64::engine::general_purpose::STANDARD.decode(key_str))
+            {
+                if key_bytes.len() == 32 {
+                    let mut k = [0u8; 32];
+                    k.copy_from_slice(&key_bytes);
+                    let v_id = state.db.get_setting("active_vault_id").unwrap_or_else(|| "default_vault".to_string());
+                    save_wrapped_package_key(&state, &v_id, &info.package_id, &k);
+                }
+            }
+        }
         return Ok(SwarmResolveResult {
             package_id: existing_pkg.package_id,
             name: existing_pkg.name,
@@ -1395,6 +1432,7 @@ pub async fn resolve_magnet_package(
                                         if let Ok(manifest) = PackageManifest::decrypt(&enc_data, key) {
                                             let v_id = state.db.get_setting("active_vault_id").unwrap_or_else(|| "default_vault".to_string());
                                             let _ = state.db.upsert_package(&v_id, &manifest);
+                                            save_wrapped_package_key(&state, &v_id, &manifest.package_id, key);
                                             return Ok(SwarmResolveResult {
                                                 package_id: manifest.package_id,
                                                 name: manifest.name,
@@ -1488,6 +1526,7 @@ pub async fn copy_shards_to_my_drive(
                                         for k in &candidate_keys {
                                             if let Ok(manifest) = PackageManifest::decrypt(&enc_data, k) {
                                                 let _ = state.db.upsert_package(&vault_id, &manifest);
+                                                save_wrapped_package_key(&state, &vault_id, &manifest.package_id, k);
                                                 resolved = Some(manifest);
                                                 break 'search;
                                             }
@@ -1520,16 +1559,17 @@ pub async fn copy_shards_to_my_drive(
         return Err("Active vault has no storage targets configured.".into());
     }
 
-    let client = get_drive_client(&state.db).await?;
     let targets = &vault.targets;
     let num_targets = targets.len();
+    let clients = get_drive_clients_for_targets(&state.db, targets).await?;
 
     // Ensure .magdrive and isolated package folders exist across all configured vault targets
     let mut resolved_chunks_dirs = Vec::new();
     let mut resolved_magdrive_dirs = Vec::new();
-    for target in targets {
-        let magdrive_dir = ensure_cached_folder(&client, &state.folder_cache, &target.target_id, ".magdrive").await?;
-        let pkg_dir = ensure_cached_package_folder(&client, &state.folder_cache, &target.target_id, &package_id).await?;
+    for (idx, target) in targets.iter().enumerate() {
+        let client = &clients[idx];
+        let magdrive_dir = ensure_cached_folder(client, &state.folder_cache, &target.target_id, ".magdrive").await?;
+        let pkg_dir = ensure_cached_package_folder(client, &state.folder_cache, &target.target_id, &package_id).await?;
         resolved_magdrive_dirs.push(magdrive_dir);
         resolved_chunks_dirs.push(pkg_dir);
     }
@@ -1591,7 +1631,8 @@ pub async fn copy_shards_to_my_drive(
         let chunks_dir = &resolved_chunks_dirs[target_idx];
 
         let chunk_file_name = format!("chunk_{}_{}.bin", package_id, chunk.sha256);
-        let copy_res = client
+        let copy_client = &clients[target_idx];
+        let copy_res = copy_client
             .copy_file(&chunk.file_id, chunks_dir, Some(&chunk_file_name))
             .await;
 
@@ -1660,9 +1701,10 @@ pub async fn copy_shards_to_my_drive(
         if let Ok(meta_bytes) = updated_manifest.encrypt(&mk) {
             let meta_file_name = format!("meta_{}.enc", package_id);
             for (idx, _target) in targets.iter().enumerate() {
+                let client = &clients[idx];
                 // 1. Private metadata folder (for internal sync)
                 if let Some(magdrive_dir) = resolved_magdrive_dirs.get(idx) {
-                    if let Ok(meta_dir) = ensure_cached_folder(&client, &state.folder_cache, magdrive_dir, "metadata").await {
+                    if let Ok(meta_dir) = ensure_cached_folder(client, &state.folder_cache, magdrive_dir, "metadata").await {
                         let _ = client.upload_file(&meta_dir, &meta_file_name, &meta_bytes).await;
                     }
                 }
@@ -2277,7 +2319,9 @@ async fn download_and_reconstruct_stripe(
     s_idx: usize,
     stripe: Stripe,
     total_stripes: usize,
-    client: DriveClient,
+    clients: Arc<Vec<DriveClient>>,
+    target_index_map: Arc<HashMap<String, usize>>,
+    default_client: DriveClient,
     key: [u8; 32],
     schema: ErasureSchema,
     total_size: u64,
@@ -2304,13 +2348,35 @@ async fn download_and_reconstruct_stripe(
     let mut futures = futures::stream::FuturesUnordered::new();
     for chunk in stripe.chunks {
         if chunk.shard_index < total_shards {
-            let client_clone = client.clone();
+            let primary_client = if let Some(&idx) = target_index_map.get(&chunk.target_id) {
+                clients.get(idx).cloned().unwrap_or_else(|| default_client.clone())
+            } else {
+                default_client.clone()
+            };
+            let all_clients = clients.clone();
             let file_id = chunk.file_id;
             let shard_idx = chunk.shard_index;
             let key_clone = key;
+
             futures.push(async move {
-                let res = client_clone.download_file(&file_id).await;
-                match res {
+                let primary_res = primary_client.download_file(&file_id).await;
+                let final_res = match primary_res {
+                    Ok(bytes) => Ok(bytes),
+                    Err(orig_err) => {
+                        let mut fallback_success = None;
+                        for fb_client in all_clients.iter() {
+                            if fb_client.account_email != primary_client.account_email {
+                                if let Ok(bytes) = fb_client.download_file(&file_id).await {
+                                    fallback_success = Some(bytes);
+                                    break;
+                                }
+                            }
+                        }
+                        fallback_success.ok_or(orig_err)
+                    }
+                };
+
+                match final_res {
                     Ok(encrypted_bytes) => {
                         let dec_res = tokio::task::spawn_blocking(move || {
                             decrypt_chunk(&encrypted_bytes, &key_clone)
@@ -2320,7 +2386,7 @@ async fn download_and_reconstruct_stripe(
                         match dec_res {
                             Ok(Ok(decrypted)) => Ok((shard_idx, decrypted)),
                             Ok(Err(e)) => Err(format!("Decryption error on shard {}: {}", shard_idx, e)),
-                            Err(e) => Err(format!("Task error on shard {}: {}", shard_idx, e)),
+                            Err(e) => Err(format!("Task execution error on shard {}: {}", shard_idx, e)),
                         }
                     }
                     Err(e) => Err(format!("Download error on shard {}: {}", shard_idx, e)),
@@ -2330,6 +2396,7 @@ async fn download_and_reconstruct_stripe(
     }
 
     let mut valid_count = 0;
+    let mut shard_errors = Vec::new();
     while let Some(res) = futures.next().await {
         // Check cancellation mid-flight
         if let Ok(Some(tx)) = db.get_transfer(&transfer_id) {
@@ -2389,14 +2456,15 @@ async fn download_and_reconstruct_stripe(
             }
             Err(err_msg) => {
                 eprintln!("Shard download warning: {}", err_msg);
+                shard_errors.push(err_msg);
             }
         }
     }
 
     if valid_count < needed_shards {
         let err_msg = format!(
-            "Insufficient shards for stripe {}: obtained {}/{} (requires at least {} data shards)",
-            s_idx + 1, valid_count, total_shards, needed_shards
+            "Insufficient shards for stripe {}: obtained {}/{} (requires at least {} data shards). Details: [{}]",
+            s_idx + 1, valid_count, total_shards, needed_shards, shard_errors.join("; ")
         );
         let _ = db.update_transfer_status(&transfer_id, "failed", Some(&err_msg));
         let _ = app.emit(
@@ -2504,8 +2572,15 @@ pub async fn download_package(
             get_or_derive_master_key(&state.key_cache, &vault.id, p, &salt)?
         }
     } else {
-        let salt = hex::decode(&vault.salt_hex).map_err(|e| e.to_string())?;
-        let master_key = get_or_derive_master_key(&state.key_cache, &vault.id, "magdrive", &salt)?;
+        let master_key = {
+            let lock = state.key_cache.lock().unwrap();
+            lock.iter()
+                .find(|(k, _)| k.starts_with(&vault.id))
+                .map(|(_, val)| *val)
+        }.unwrap_or_else(|| {
+            let salt = hex::decode(&vault.salt_hex).unwrap_or_default();
+            get_or_derive_master_key(&state.key_cache, &vault.id, "magdrive", &salt).unwrap_or([0u8; 32])
+        });
 
         // Try unwrapping package-specific key from db
         if let Ok(Some(enc_hex)) = state.db.get_package_key_enc(&package_id) {
@@ -2529,7 +2604,14 @@ pub async fn download_package(
         }
     };
 
-    let client = get_drive_client(&state.db).await?;
+    let target_clients = get_drive_clients_for_targets(&state.db, &vault.targets).await.unwrap_or_default();
+    let default_client = get_drive_client(&state.db).await?;
+    let mut target_index_map = HashMap::new();
+    for (idx, target) in vault.targets.iter().enumerate() {
+        target_index_map.insert(target.target_id.clone(), idx);
+    }
+    let clients_arc = Arc::new(target_clients);
+    let target_map_arc = Arc::new(target_index_map);
 
     let dest_path = std::path::PathBuf::from(&destination_path);
     if let Some(parent) = dest_path.parent() {
@@ -2589,7 +2671,9 @@ pub async fn download_package(
 
     let stripe_stream = futures::stream::iter(pkg.stripes.into_iter().enumerate())
         .map(|(s_idx, stripe)| {
-            let client = client.clone();
+            let clients = clients_arc.clone();
+            let target_map = target_map_arc.clone();
+            let default_client = default_client.clone();
             let key = key;
             let schema = pkg.erasure_schema.clone();
             let total_size = pkg.total_size;
@@ -2605,7 +2689,9 @@ pub async fn download_package(
                     s_idx,
                     stripe,
                     total_stripes,
-                    client,
+                    clients,
+                    target_map,
+                    default_client,
                     key,
                     schema,
                     total_size,

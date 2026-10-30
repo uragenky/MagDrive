@@ -6,7 +6,7 @@ import { api } from '../services/api';
 interface MagnetModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onDownloadFromMagnet: (packageId: string) => void;
+  onDownloadFromMagnet: (packageId: string, directKey?: string) => void;
 }
 
 export const MagnetModal: React.FC<MagnetModalProps> = ({
@@ -48,7 +48,7 @@ export const MagnetModal: React.FC<MagnetModalProps> = ({
 
   const handleStartDownload = () => {
     if (!swarmInfo) return;
-    onDownloadFromMagnet(swarmInfo.package_id);
+    onDownloadFromMagnet(swarmInfo.package_id, swarmInfo.key);
     onClose();
   };
 

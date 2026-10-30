@@ -53,6 +53,7 @@ export function App() {
     fileName: string;
     fileSize?: number;
     originalSha256?: string;
+    directKey?: string;
   } | null>(null);
 
   useEffect(() => {
@@ -158,7 +159,7 @@ export function App() {
     }
   };
 
-  const handleDownload = async (packageId: string) => {
+  const handleDownload = async (packageId: string, directKey?: string) => {
     try {
       const pkg = files.find((f) => f.package_id === packageId);
       const fileName = pkg ? pkg.name : `download_${packageId}.bin`;
@@ -173,6 +174,7 @@ export function App() {
           fileName,
           fileSize: pkg?.total_size,
           originalSha256: pkg?.original_sha256,
+          directKey,
         });
         return;
       }
@@ -180,7 +182,7 @@ export function App() {
       // 3. Otherwise, automatically download to default download folder
       const destinationPath = await api.resolveDownloadPath(settings.download_dir, fileName);
       try {
-        await executeDownload(packageId, destinationPath, fileName);
+        await executeDownload(packageId, destinationPath, fileName, directKey);
       } catch (err: any) {
         addToast('error', 'Failed to download file: ' + (err?.toString() || ''), 'Download Error');
       }
@@ -189,10 +191,10 @@ export function App() {
     }
   };
 
-  const executeDownload = async (packageId: string, destinationPath: string, displayName?: string) => {
+  const executeDownload = async (packageId: string, destinationPath: string, displayName?: string, directKey?: string) => {
     try {
       setIsDownloading(packageId);
-      const result = await api.downloadPackage(packageId, destinationPath);
+      const result = await api.downloadPackage(packageId, destinationPath, directKey);
       await refreshTransfers();
 
       // Show success toast with quick action to open folder or file
@@ -433,7 +435,7 @@ export function App() {
       <MagnetModal
         isOpen={isMagnetModalOpen}
         onClose={() => setIsMagnetModalOpen(false)}
-        onDownloadFromMagnet={handleDownload}
+        onDownloadFromMagnet={(pkgId, directKey) => handleDownload(pkgId, directKey)}
       />
 
       <VaultModal
@@ -453,7 +455,12 @@ export function App() {
           fileSize={downloadModalTarget.fileSize}
           originalSha256={downloadModalTarget.originalSha256}
           onConfirmDownload={(destPath) =>
-            executeDownload(downloadModalTarget.packageId, destPath, downloadModalTarget.fileName)
+            executeDownload(
+              downloadModalTarget.packageId,
+              destPath,
+              downloadModalTarget.fileName,
+              downloadModalTarget.directKey
+            )
           }
           onNavigateToTransfers={() => {
             setDownloadModalTarget(null);
