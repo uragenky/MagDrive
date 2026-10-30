@@ -219,6 +219,15 @@ magdrive:?xt=urn:magdrive:<package_id>&vh=<vault_id_hint>&sz=<total_bytes>&dn=<f
 - `src`: Origin Google Drive folder ID for bootstrap peer discovery.
 - `tr`: Swarm tracker endpoint URL (can be specified multiple times for multi-tracker redundancy).
 
+### Blind Tracker Swarm Discovery & Self-Healing
+MagDrive incorporates a decentralized peer-to-peer distribution mechanism powered by Blind Trackers:
+- **Zero-Knowledge Topic Registration**: Trackers only store HMAC-SHA256 blind topics (`calculate_blind_topic`) mapped to public Google Drive package folder IDs (`folder_id`). Trackers never store chunk hashes, file names, or metadata.
+- **Multi-Tier Swarm Failover**:
+  1. *Tier 1 (Origin Direct Copy)*: Attempts instant cloud-to-cloud `files.copy` from the original uploader.
+  2. *Tier 2 (Tracker Mirror Discovery)*: If origin shards are blocked by Google Workspace domain restrictions or return 404, MagDrive queries tracker mirrors for `chunk_<package_id>_<sha256>.bin` and replicates directly from live swarm seeders. Dead mirrors are automatically pruned via `/api/report-dead`.
+  3. *Tier 3 (Reed-Solomon Self-Healing)*: If a shard is completely missing across all tracker mirrors, surviving shards are mathematically decoded in local memory, re-encoded, encrypted with AES-256-GCM, and uploaded directly to the destination vault.
+  4. *Tier 4 (Swarm Seeding)*: Successful recipients can optionally register their folder with the tracker to become a public mirror for subsequent peers.
+
 ---
 
 ## Prerequisites

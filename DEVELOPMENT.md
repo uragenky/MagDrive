@@ -241,7 +241,7 @@ magdrive/
 | `pick_save_file_path` | `default_name: String, default_dir: Option<String>` | `Option<String>` | Native "Save As" file popup dialog with suggested name. |
 | `resolve_download_path` | `download_dir: String, file_name: String` | `String` | Generates collision-safe path for automatic downloads. |
 | `resolve_magnet_package` | `magnet_uri: String` | `SwarmResolveResult` | Resolves magnet URI, queries multi-trackers, and fetches metadata. |
-| `copy_shards_to_my_drive` | `package_id, opt_in_seeding` | `String` | Server-side copies shards to user's Drive and optionally seeds. |
+| `copy_shards_to_my_drive` | `package_id, opt_in_seeding` | `String` | 3-tier resilient copy: origin fast copy, tracker swarm discovery, and Reed-Solomon self-healing. |
 | `get_tracker_settings` | None | `TrackerSettings` | Retrieves active tracker URLs and default opt-in seeding setting. |
 | `save_tracker_settings` | `trackers, default_seeding` | `()` | Saves tracker endpoints and seeding preferences to SQLite. |
 
