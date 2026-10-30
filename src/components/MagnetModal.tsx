@@ -113,9 +113,34 @@ export const MagnetModal: React.FC<MagnetModalProps> = ({
           )}
 
           {errorMsg && (
-            <div className="p-3 rounded-lg bg-rose-500/10 border border-rose-500/20 text-rose-400 flex items-center space-x-2">
-              <AlertCircle className="w-4 h-4 shrink-0" />
-              <span>{errorMsg}</span>
+            <div className="space-y-3">
+              <div className="p-3 rounded-lg bg-rose-500/10 border border-rose-500/20 text-rose-400 flex items-center space-x-2">
+                <AlertCircle className="w-4 h-4 shrink-0" />
+                <span>{errorMsg}</span>
+              </div>
+
+              {swarmInfo && (errorMsg.toLowerCase().includes('shard') || errorMsg.toLowerCase().includes('restricted') || errorMsg.toLowerCase().includes('copy') || errorMsg.toLowerCase().includes('not found')) && (
+                <div className="p-4 rounded-xl bg-amber-500/10 border border-amber-500/20 text-amber-200 space-y-3">
+                  <div className="flex items-start space-x-2.5">
+                    <AlertCircle className="w-4 h-4 shrink-0 text-amber-400 mt-0.5" />
+                    <div className="space-y-1">
+                      <div className="font-semibold text-xs text-amber-300">
+                        Cloud Server-Side Copy Restricted
+                      </div>
+                      <p className="text-[11px] text-zinc-300 leading-relaxed">
+                        One or more shards are hosted on Google accounts with cross-domain copy restrictions. However, this file is intact and can be directly reconstructed to your local disk using Reed-Solomon recovery.
+                      </p>
+                    </div>
+                  </div>
+                  <button
+                    onClick={handleStartDownload}
+                    className="w-full py-2 px-3 bg-amber-500 hover:bg-amber-400 active:bg-amber-600 text-zinc-950 font-semibold rounded-lg text-xs flex items-center justify-center space-x-1.5 transition-colors shadow-sm"
+                  >
+                    <Download className="w-3.5 h-3.5" />
+                    <span>Download to Computer (Auto-Recover)</span>
+                  </button>
+                </div>
+              )}
             </div>
           )}
 

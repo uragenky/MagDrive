@@ -16,7 +16,7 @@ use crate::crypto::argon::{derive_master_key, generate_salt};
 use crate::crypto::signature::Keypair;
 use crate::crypto::compute_sha256;
 use crate::crypto::aes::{encrypt_chunk, decrypt_chunk};
-use crate::drive::client::{DriveClient, DriveAboutUser, SharedDriveItem, TargetType};
+use crate::drive::client::{DriveClient, DriveAboutUser, SharedDriveItem, TargetType, DriveFileItem, DriveError};
 use crate::drive::oauth::{start_oauth_flow, GcpCredentials};
 use crate::drive::permissions::DrivePermissionItem;
 use crate::erasure::rs::{encode, reconstruct, calculate_adaptive_erasure_schema};
@@ -52,6 +52,79 @@ pub fn get_tracker_urls_from_db(db: &Database) -> Vec<String> {
         }
     }
     vec!["https://magdrive-tracker.vercel.app/api".to_string()]
+}
+
+/// Swarm mirror discovery and caching engine for Blind Tracker networks
+pub struct SwarmShardFinder {
+    pub client: DriveClient,
+    pub trackers: Vec<String>,
+    pub topic: String,
+    pub peers: Vec<String>,
+    pub folder_files_cache: HashMap<String, Vec<DriveFileItem>>,
+    pub dead_peers: HashSet<String>,
+}
+
+impl SwarmShardFinder {
+    pub async fn new(
+        client: DriveClient,
+        trackers: Vec<String>,
+        package_id: &str,
+        initial_peers: Vec<String>,
+    ) -> Self {
+        let topic = calculate_blind_topic(package_id);
+        let mut peers = fetch_peers_multi(&trackers, &topic).await;
+        for p in initial_peers {
+            if !peers.contains(&p) {
+                peers.push(p);
+            }
+        }
+        Self {
+            client,
+            trackers,
+            topic,
+            peers,
+            folder_files_cache: HashMap::new(),
+            dead_peers: HashSet::new(),
+        }
+    }
+
+    /// Searches swarm peer folders for a chunk matching chunk_file_name.
+    /// If found, returns (peer_folder_id, DriveFileItem)
+    pub async fn find_shard(&mut self, chunk_file_name: &str) -> Option<(String, DriveFileItem)> {
+        for peer_folder in &self.peers {
+            if self.dead_peers.contains(peer_folder) {
+                continue;
+            }
+
+            if !self.folder_files_cache.contains_key(peer_folder) {
+                match self.client.list_files_in_folder(peer_folder).await {
+                    Ok(files) => {
+                        self.folder_files_cache.insert(peer_folder.clone(), files);
+                    }
+                    Err(DriveError::NotFound(_)) => {
+                        self.dead_peers.insert(peer_folder.clone());
+                        let tr = self.trackers.clone();
+                        let top = self.topic.clone();
+                        let dead = peer_folder.clone();
+                        tokio::spawn(async move {
+                            report_dead_multi(&tr, &top, &dead).await;
+                        });
+                        continue;
+                    }
+                    Err(_) => {
+                        continue;
+                    }
+                }
+            }
+
+            if let Some(files) = self.folder_files_cache.get(peer_folder) {
+                if let Some(item) = files.iter().find(|f| f.name == chunk_file_name) {
+                    return Some((peer_folder.clone(), item.clone()));
+                }
+            }
+        }
+        None
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1575,9 +1648,9 @@ pub async fn copy_shards_to_my_drive(
     }
 
     let mut chunk_refs = Vec::new();
-    for stripe in &pkg.stripes {
+    for (s_idx, stripe) in pkg.stripes.iter().enumerate() {
         for chunk in &stripe.chunks {
-            chunk_refs.push(chunk.clone());
+            chunk_refs.push((s_idx, chunk.clone()));
         }
     }
 
@@ -1621,25 +1694,141 @@ pub async fn copy_shards_to_my_drive(
         }),
     );
 
+    let pkg_key_opt: Option<[u8; 32]> = {
+        let master_key_opt = {
+            let lock = state.key_cache.lock().unwrap();
+            lock.get(&vault.id).copied().or_else(|| {
+                lock.iter()
+                    .find(|(k, _)| k.starts_with(&vault.id))
+                    .map(|(_, val)| *val)
+            })
+        };
+
+        if let Ok(Some(enc_hex)) = state.db.get_package_key_enc(&package_id) {
+            if let Some(mk) = master_key_opt {
+                if let Ok(raw_enc) = base64::engine::general_purpose::STANDARD.decode(&enc_hex) {
+                    if let Ok(unwrapped) = decrypt_chunk(&raw_enc, &mk) {
+                        if unwrapped.len() == 32 {
+                            let mut k = [0u8; 32];
+                            k.copy_from_slice(&unwrapped);
+                            Some(k)
+                        } else {
+                            Some(mk)
+                        }
+                    } else {
+                        Some(mk)
+                    }
+                } else {
+                    Some(mk)
+                }
+            } else {
+                None
+            }
+        } else {
+            master_key_opt
+        }
+    };
+
+    let trackers = get_tracker_urls_from_db(&state.db);
+    let default_client = get_drive_client(&state.db).await?;
+    let mut swarm_finder = SwarmShardFinder::new(default_client.clone(), trackers.clone(), &package_id, Vec::new()).await;
+
     let mut copied_count = 0;
     // Map sha256 -> (new_file_id, chosen_target_id)
     let mut new_file_mapping: HashMap<String, (String, String)> = HashMap::new();
 
-    for (idx, chunk) in chunk_refs.iter().enumerate() {
+    for (_idx, (s_idx, chunk)) in chunk_refs.iter().enumerate() {
         let target_idx = chunk.shard_index % num_targets;
         let chosen_target = &targets[target_idx];
         let chunks_dir = &resolved_chunks_dirs[target_idx];
 
         let chunk_file_name = format!("chunk_{}_{}.bin", package_id, chunk.sha256);
         let copy_client = &clients[target_idx];
-        let copy_res = copy_client
-            .copy_file(&chunk.file_id, chunks_dir, Some(&chunk_file_name))
-            .await;
 
-        match copy_res {
-            Ok(created_item) => {
+        let mut final_created_id: Option<String> = None;
+
+        // Tier 1: Fast direct server-side copy from origin
+        if let Ok(item) = copy_client
+            .copy_file(&chunk.file_id, chunks_dir, Some(&chunk_file_name))
+            .await
+        {
+            final_created_id = Some(item.id);
+        }
+
+        // Tier 2: Tracker Swarm Shard Discovery
+        if final_created_id.is_none() {
+            if let Some((_peer_folder, mirror_item)) = swarm_finder.find_shard(&chunk_file_name).await {
+                if let Ok(item) = copy_client.copy_file(&mirror_item.id, chunks_dir, Some(&chunk_file_name)).await {
+                    final_created_id = Some(item.id);
+                } else if let Ok(mirror_bytes) = copy_client.download_file(&mirror_item.id).await {
+                    if let Ok(uploaded_id) = copy_client.upload_file(chunks_dir, &chunk_file_name, &mirror_bytes).await {
+                        final_created_id = Some(uploaded_id);
+                    }
+                }
+            }
+        }
+
+        // Tier 3: Reed-Solomon Self-Healing
+        if final_created_id.is_none() {
+            if let Some(key) = pkg_key_opt {
+                let stripe = &pkg.stripes[*s_idx];
+                let schema = &pkg.erasure_schema;
+                let total_shards = schema.data_shards + schema.parity_shards;
+                let mut available_shards: Vec<Option<Vec<u8>>> = vec![None; total_shards];
+
+                for other_chunk in &stripe.chunks {
+                    if other_chunk.shard_index < total_shards && other_chunk.shard_index != chunk.shard_index {
+                        let enc_bytes_opt = if let Some((copied_id, _)) = new_file_mapping.get(&other_chunk.sha256) {
+                            copy_client.download_file(copied_id).await.ok()
+                        } else if let Ok(b) = copy_client.download_file(&other_chunk.file_id).await {
+                            Some(b)
+                        } else {
+                            let other_name = format!("chunk_{}_{}.bin", package_id, other_chunk.sha256);
+                            if let Some((_, m_item)) = swarm_finder.find_shard(&other_name).await {
+                                copy_client.download_file(&m_item.id).await.ok()
+                            } else {
+                                None
+                            }
+                        };
+
+                        if let Some(enc_bytes) = enc_bytes_opt {
+                            if let Ok(dec) = decrypt_chunk(&enc_bytes, &key) {
+                                available_shards[other_chunk.shard_index] = Some(dec);
+                            }
+                        }
+                    }
+                }
+
+                let present = available_shards.iter().filter(|s| s.is_some()).count();
+                if present >= schema.data_shards {
+                    let stripe_len = if *s_idx == pkg.stripes.len() - 1 {
+                        let rem = (pkg.total_size as usize) % pkg.chunk_size;
+                        if rem == 0 {
+                            pkg.chunk_size
+                        } else {
+                            rem
+                        }
+                    } else {
+                        pkg.chunk_size
+                    };
+
+                    if reconstruct(&mut available_shards, schema.data_shards, schema.parity_shards, stripe_len).is_ok() {
+                        if let Some(Some(ref recovered_plain)) = available_shards.get(chunk.shard_index) {
+                            if let Ok(re_encrypted) = encrypt_chunk(recovered_plain, &key) {
+                                if let Ok(uploaded_id) = copy_client.upload_file(chunks_dir, &chunk_file_name, &re_encrypted).await {
+                                    final_created_id = Some(uploaded_id);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        match final_created_id {
+            Some(created_item_id) => {
                 copied_count += 1;
-                new_file_mapping.insert(chunk.sha256.clone(), (created_item.id, chosen_target.target_id.clone()));
+                new_file_mapping.insert(chunk.sha256.clone(), (created_item_id, chosen_target.target_id.clone()));
                 let transferred = if total_chunks > 0 {
                     (pkg.total_size * copied_count as u64) / total_chunks as u64
                 } else {
@@ -1665,8 +1854,8 @@ pub async fn copy_shards_to_my_drive(
                     }),
                 );
             }
-            Err(e) => {
-                let err_msg = format!("Failed to copy shard {}: {}", idx, e);
+            None => {
+                let err_msg = format!("Failed to copy shard {} (stripe {}): Shard is restricted or unavailable on origin and tracker peers, and insufficient surviving shards for recovery.", chunk.shard_index, s_idx + 1);
                 let _ = state.db.update_transfer_status(&transfer_id, "failed", Some(&err_msg));
                 return Err(err_msg);
             }
@@ -2322,6 +2511,7 @@ async fn download_and_reconstruct_stripe(
     clients: Arc<Vec<DriveClient>>,
     target_index_map: Arc<HashMap<String, usize>>,
     default_client: DriveClient,
+    swarm_finder: Arc<tokio::sync::Mutex<SwarmShardFinder>>,
     key: [u8; 32],
     schema: ErasureSchema,
     total_size: u64,
@@ -2355,8 +2545,11 @@ async fn download_and_reconstruct_stripe(
             };
             let all_clients = clients.clone();
             let file_id = chunk.file_id;
+            let shard_sha = chunk.sha256;
             let shard_idx = chunk.shard_index;
             let key_clone = key;
+            let finder_clone = swarm_finder.clone();
+            let pkg_id_clone = package_id.clone();
 
             futures.push(async move {
                 let primary_res = primary_client.download_file(&file_id).await;
@@ -2372,6 +2565,18 @@ async fn download_and_reconstruct_stripe(
                                 }
                             }
                         }
+
+                        // Fallback to Tracker Swarm Mirror if origin failed
+                        if fallback_success.is_none() {
+                            let chunk_file_name = format!("chunk_{}_{}.bin", pkg_id_clone, shard_sha);
+                            let mut finder = finder_clone.lock().await;
+                            if let Some((_peer_folder, mirror_item)) = finder.find_shard(&chunk_file_name).await {
+                                if let Ok(bytes) = primary_client.download_file(&mirror_item.id).await {
+                                    fallback_success = Some(bytes);
+                                }
+                            }
+                        }
+
                         fallback_success.ok_or(orig_err)
                     }
                 };
@@ -2669,11 +2874,17 @@ pub async fn download_package(
     let completed_shards = Arc::new(AtomicUsize::new(0));
     let start_time = std::time::Instant::now();
 
+    let trackers = get_tracker_urls_from_db(&state.db);
+    let swarm_finder = Arc::new(tokio::sync::Mutex::new(
+        SwarmShardFinder::new(default_client.clone(), trackers, &package_id, Vec::new()).await
+    ));
+
     let stripe_stream = futures::stream::iter(pkg.stripes.into_iter().enumerate())
         .map(|(s_idx, stripe)| {
             let clients = clients_arc.clone();
             let target_map = target_map_arc.clone();
             let default_client = default_client.clone();
+            let swarm_finder = swarm_finder.clone();
             let key = key;
             let schema = pkg.erasure_schema.clone();
             let total_size = pkg.total_size;
@@ -2692,6 +2903,7 @@ pub async fn download_package(
                     clients,
                     target_map,
                     default_client,
+                    swarm_finder,
                     key,
                     schema,
                     total_size,
